@@ -62,6 +62,37 @@ Insulin (`HKQuantityTypeIdentifier.insulinDelivery`) and carbohydrates
 (`.dietaryCarbohydrates`) are parsed into `Treatment` subclasses but never written to HealthKit —
 that is upstream issue [#330](https://github.com/nightscout/nightguard/issues/330).
 
+## The Lilly Health demo shell (`nightguard/lillyhealth/`)
+
+This fork ships a second, Lilly Health–style front end layered on top of the original app. It is a
+**synthetic demo** — no Lilly systems, no real patient, prescription or pharmacy data.
+
+- `SceneDelegate` installs `LillyRootTabView` (Home · Logbook · Explore · Care · More) as the root in
+  light mode; the original `RootTabView` and its dark screens stay in the codebase and are reachable
+  from **More** and the Home "Blood Glucose" chip (each wrapped with `.preferredColorScheme(.dark)`).
+- `HealthLogEntry.swift` holds the entry models (`FoodEntry`, `WeightEntry`, `ActivityEntry`,
+  `SleepEntry`, `MedicationEntry`) and `ZepboundDose` demo constants; `HealthLogStore.swift` is the
+  single `ObservableObject` (JSON `Snapshot` in `UserDefaults` key `lillyHealth.logbook`, synthetic
+  seed data, daily rollups, dose/streak math). Both are UIKit-free so they compile into
+  `nightguardTests` (`HealthLogStoreTest.swift`).
+- `LillyTheme.swift` is the visual system (Lilly red, serif display font, paper background, cards).
+- Store schema changes must stay backward compatible — `load()` drops a snapshot that fails to
+  decode, which would wipe a demo device's logbook. New fields get a default or are optional.
+- New Swift files must be added to `nightguard.xcodeproj/project.pbxproj` (build file, file
+  reference, `lillyhealth` group, Sources phase) or they silently don't compile into the target.
+- iOS 15 deployment target: no Swift Charts — extend the hand-rolled `LillyLineChart`.
+
+## Demo: event-driven review → PRD → PR
+
+```
+App Store review → event trigger → review analysis → PRD → Devin session → PR → updated app
+```
+
+The product signal is the App Store review *"Calories, weight, breakdown"*; the repo-grounded PRD it
+produces is `docs/PRD-LILLY-HEALTH-DASHBOARD.md` (protein per meal, clothed/unclothed weigh-ins,
+maintain vs. deficit goal, activity categories with miles and dumbbell load). Hand that PRD to a
+Devin session to implement the four requirements against `nightguard/lillyhealth/`.
+
 ## Demo: Ask Devin kickoff (issue #330)
 
 Progressive prompts for a live demo. The first two are lightweight Ask Devin questions; the third
