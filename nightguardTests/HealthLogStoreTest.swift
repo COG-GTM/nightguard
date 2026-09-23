@@ -103,6 +103,90 @@ class HealthLogStoreTest: XCTestCase {
         XCTAssertTrue(makeStore().isEmpty)
     }
 
+    func testProteinIsSummedPerDayAndIgnoresUnloggedMeals() {
+        let store = makeStore()
+        let now = Date()
+
+        store.log(FoodEntry(date: now, name: "Eggs", calories: 200, meal: .breakfast, proteinGrams: 14))
+        store.log(FoodEntry(date: now, name: "Salad", calories: 430, meal: .lunch, proteinGrams: 38))
+        store.log(FoodEntry(date: now, name: "Apple", calories: 95, meal: .snack))
+
+        XCTAssertEqual(store.protein(on: now), 52)
+        XCTAssertEqual(store.calories(on: now), 725)
+        XCTAssertEqual(store.proteinTarget, HealthLogStore.defaultProteinTarget)
+    }
+
+    func testWeightHistoryIsFilteredByWeighInState() {
+        let store = makeStore()
+        let calendar = Calendar.current
+        for daysBack in 0..<3 {
+            let day = calendar.date(byAdding: .day, value: -daysBack, to: Date())!
+            store.log(WeightEntry(date: day, pounds: 220 - Double(daysBack), state: .unclothed))
+            store.log(WeightEntry(date: day, pounds: 223 - Double(daysBack), state: .clothed))
+        }
+
+        XCTAssertEqual(store.weightHistory(days: 7, state: .unclothed).map { $0.pounds }, [218, 219, 220])
+        XCTAssertEqual(store.weightHistory(days: 7, state: .clothed).map { $0.pounds }, [221, 222, 223])
+        XCTAssertEqual(store.latestWeight(state: .clothed)?.pounds, 223)
+    }
+
+    func testWeightEntryDefaultsToUnclothedWhenStateIsAbsent() throws {
+        let json = Data("""
+        {"id":"\(UUID().uuidString)","date":0,"pounds":212.4}
+        """.utf8)
+        let entry = try JSONDecoder().decode(WeightEntry.self, from: json)
+        XCTAssertEqual(entry.state, .unclothed)
+        XCTAssertEqual(entry.pounds, 212.4)
+    }
+
+    func testDeficitGoalDerivesTargetBelowMaintenance() {
+        let store = makeStore()
+        store.maintenanceCalories = 2300
+
+        store.weightGoal = .maintain
+        XCTAssertEqual(store.derivedCalorieTarget, 2300)
+        store.applyDerivedCalorieTarget()
+        XCTAssertEqual(store.calorieGoalCopy, "on target")
+
+        store.weightGoal = .deficit
+        XCTAssertEqual(store.derivedCalorieTarget, 1800)
+        store.applyDerivedCalorieTarget()
+        XCTAssertFalse(store.isCalorieTargetOverridden)
+        XCTAssertEqual(store.calorieGoalCopy, "500 under maintenance today")
+
+        store.calorieTarget = 1700
+        XCTAssertTrue(store.isCalorieTargetOverridden)
+
+        let reloaded = makeStore()
+        XCTAssertEqual(reloaded.weightGoal, .deficit)
+        XCTAssertEqual(reloaded.maintenanceCalories, 2300)
+        XCTAssertEqual(reloaded.calorieTarget, 1700)
+    }
+
+    func testActivityCategoryMeasuresAndSummaries() {
+        let run = ActivityEntry(date: Date(), name: "Morning Run", minutes: 28, category: .run, miles: 3.2)
+        let strength = ActivityEntry(date: Date(), name: "Strength Training", minutes: 45, category: .strength, weightLbs: 45)
+        let yoga = ActivityEntry(date: Date(), name: "Yoga", minutes: 30, category: .yoga)
+
+        XCTAssertEqual(run.summary, "Run · 3.2 mi · 28 min")
+        XCTAssertEqual(strength.summary, "Strength · 45 lb dumbbells · 45 min")
+        XCTAssertEqual(yoga.summary, "Yoga · 30 min")
+        XCTAssertEqual(ActivityCategory.cycling.measure, .distance)
+        XCTAssertEqual(ActivityCategory.strength.measure, .load)
+        XCTAssertEqual(ActivityCategory.swim.measure, .duration)
+    }
+
+    func testLegacyActivityDecodesWithInferredCategory() throws {
+        let json = Data("""
+        {"id":"\(UUID().uuidString)","date":0,"name":"Morning Walk","minutes":32}
+        """.utf8)
+        let entry = try JSONDecoder().decode(ActivityEntry.self, from: json)
+        XCTAssertEqual(entry.category, .walk)
+        XCTAssertNil(entry.miles)
+        XCTAssertNil(entry.weightLbs)
+        XCTAssertEqual(entry.summary, "Walk · 32 min")
+    }
+
     func testMilligramFormatting() {
         XCTAssertEqual(2.5.mgString, "2.5 mg")
         XCTAssertEqual(5.0.mgString, "5 mg")

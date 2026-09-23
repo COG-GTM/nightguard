@@ -158,6 +158,9 @@ struct LillyHomeView: View {
         let calories = store.calories(on: today)
         let target = max(store.calorieTarget, 1)
         let ratio = min(Double(calories) / Double(target), 1)
+        let protein = store.protein(on: today)
+        let proteinTarget = max(store.proteinTarget, 1)
+        let proteinRatio = min(Double(protein) / Double(proteinTarget), 1)
         return VStack(alignment: .leading, spacing: 12) {
             LillySectionLabel("Today")
             LillyCard {
@@ -178,6 +181,28 @@ struct LillyHomeView: View {
                         ZStack(alignment: .leading) {
                             Capsule().fill(LillyTheme.hairline)
                             Capsule().fill(LillyTheme.red).frame(width: proxy.size.width * ratio)
+                        }
+                    }
+                    .frame(height: 8)
+                    Text(store.calorieGoalCopy)
+                        .font(LillyTheme.body(12))
+                        .foregroundColor(LillyTheme.inkMuted)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("Protein")
+                            .font(LillyTheme.body(15, weight: .semibold))
+                            .foregroundColor(LillyTheme.ink)
+                        Spacer()
+                        Text("\(protein)")
+                            .font(LillyTheme.display(24, weight: .semibold))
+                            .foregroundColor(LillyTheme.ink)
+                        Text("/ \(store.proteinTarget) g")
+                            .font(LillyTheme.body(13))
+                            .foregroundColor(LillyTheme.inkMuted)
+                    }
+                    GeometryReader { proxy in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(LillyTheme.hairline)
+                            Capsule().fill(LillyTheme.zepboundGreen).frame(width: proxy.size.width * proteinRatio)
                         }
                     }
                     .frame(height: 8)
