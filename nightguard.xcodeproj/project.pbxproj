@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		387EE7115F5FB01EF0995EDC /* LillyTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD40D65C60D95B0A4E200E7C /* LillyTheme.swift */; };
+		A3C8FA130BDAAD25F9B87A62 /* HealthLogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4AB6F7A914452CCACB8686 /* HealthLogEntry.swift */; };
+		519750C06A822C33BDF726AB /* HealthLogEntry.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD4AB6F7A914452CCACB8686 /* HealthLogEntry.swift */; };
+		640D2C6BAEB4D95BFBEE9C7F /* HealthLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0319EABA72D5499E1D586F5E /* HealthLogStore.swift */; };
+		32CA3A4E367EDA8D3DC9F45C /* HealthLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0319EABA72D5499E1D586F5E /* HealthLogStore.swift */; };
+		D143CF97911BC47CF6E33779 /* LillyRootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31C344C07933943443F550A9 /* LillyRootTabView.swift */; };
+		4D647A8158C74CE879FF2426 /* LillyHomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADCB232FB99D018F77CB0EB9 /* LillyHomeView.swift */; };
+		9D745BA76068446A8678C6FF /* LillyLogbookView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E4DC61B7873D7937794D8C /* LillyLogbookView.swift */; };
+		AA2CC284D1F9BFB9B22E7D5A /* LillyLogSheets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F1B0BDDFB18F14459BEF498 /* LillyLogSheets.swift */; };
+		EC7A5CF9202C4501BC9B6CBF /* LillyExploreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6951CECF1A989E9F48F8B7 /* LillyExploreView.swift */; };
+		D1AE4ECFE3537C594E9DAE76 /* LillyCareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED81AC6A86DE4DB3E8DB49F9 /* LillyCareView.swift */; };
+		F3ADE08FE990AAB15EF77A16 /* LillyMoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B18CE0512EA35CB2E973B371 /* LillyMoreView.swift */; };
+		C3F064421E560BB42BAECCCD /* HealthLogStoreTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = EADC574E5BCB5C4DEE88F3C3 /* HealthLogStoreTest.swift */; };
 		28B03A3723F9CD8E000939E6 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = 28B03A3523F9CD8E000939E6 /* Localizable.strings */; };
 		28E3B4F12404075900A4EE25 /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28E3B4F02404075800A4EE25 /* SnapshotHelper.swift */; };
 		43027A4C2EBFDBFD00BE71B9 /* RootTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43027A4B2EBFDBFD00BE71B9 /* RootTabView.swift */; };
@@ -582,6 +595,17 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		BD40D65C60D95B0A4E200E7C /* LillyTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyTheme.swift; sourceTree = "<group>"; };
+		FD4AB6F7A914452CCACB8686 /* HealthLogEntry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthLogEntry.swift; sourceTree = "<group>"; };
+		0319EABA72D5499E1D586F5E /* HealthLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthLogStore.swift; sourceTree = "<group>"; };
+		31C344C07933943443F550A9 /* LillyRootTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyRootTabView.swift; sourceTree = "<group>"; };
+		ADCB232FB99D018F77CB0EB9 /* LillyHomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyHomeView.swift; sourceTree = "<group>"; };
+		D1E4DC61B7873D7937794D8C /* LillyLogbookView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyLogbookView.swift; sourceTree = "<group>"; };
+		1F1B0BDDFB18F14459BEF498 /* LillyLogSheets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyLogSheets.swift; sourceTree = "<group>"; };
+		4C6951CECF1A989E9F48F8B7 /* LillyExploreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyExploreView.swift; sourceTree = "<group>"; };
+		ED81AC6A86DE4DB3E8DB49F9 /* LillyCareView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyCareView.swift; sourceTree = "<group>"; };
+		B18CE0512EA35CB2E973B371 /* LillyMoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LillyMoreView.swift; sourceTree = "<group>"; };
+		EADC574E5BCB5C4DEE88F3C3 /* HealthLogStoreTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HealthLogStoreTest.swift; sourceTree = "<group>"; };
 		127F207A227F018E00C90F07 /* nightguard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nightguard.entitlements; sourceTree = "<group>"; };
 		28A3509723F9B31400F2AE60 /* fi-FI */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "fi-FI"; path = "fi-FI.lproj/LaunchScreen.strings"; sourceTree = "<group>"; };
 		28B03A3623F9CD8E000939E6 /* Base */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; lineEnding = 0; name = Base; path = Base.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -843,6 +867,23 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		F873D317D9FCC391DFCD59ED /* lillyhealth */ = {
+			isa = PBXGroup;
+			children = (
+				BD40D65C60D95B0A4E200E7C /* LillyTheme.swift */,
+				FD4AB6F7A914452CCACB8686 /* HealthLogEntry.swift */,
+				0319EABA72D5499E1D586F5E /* HealthLogStore.swift */,
+				31C344C07933943443F550A9 /* LillyRootTabView.swift */,
+				ADCB232FB99D018F77CB0EB9 /* LillyHomeView.swift */,
+				D1E4DC61B7873D7937794D8C /* LillyLogbookView.swift */,
+				1F1B0BDDFB18F14459BEF498 /* LillyLogSheets.swift */,
+				4C6951CECF1A989E9F48F8B7 /* LillyExploreView.swift */,
+				ED81AC6A86DE4DB3E8DB49F9 /* LillyCareView.swift */,
+				B18CE0512EA35CB2E973B371 /* LillyMoreView.swift */,
+			);
+			path = lillyhealth;
+			sourceTree = "<group>";
+		};
 		23C80CA818186A7AFE1C1929 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -898,6 +939,7 @@
 		43647BCC1BFF6435004389F9 /* nightguard */ = {
 			isa = PBXGroup;
 			children = (
+				F873D317D9FCC391DFCD59ED /* lillyhealth */,
 				430EB4EF2F1D131C00CAF155 /* .env */,
 				430EB4F42F1D4BB800CAF155 /* GoogleService-Info.plist */,
 				439BDA8E2B22520E004932EB /* external */,
@@ -922,6 +964,7 @@
 		43647BE11BFF6435004389F9 /* nightguardTests */ = {
 			isa = PBXGroup;
 			children = (
+				EADC574E5BCB5C4DEE88F3C3 /* HealthLogStoreTest.swift */,
 				43647BE41BFF6435004389F9 /* Info.plist */,
 				4351E6B31D2EFDFF001E4AE4 /* AlarmRuleTest.swift */,
 				439C391A1C0E295C00D89872 /* ChartPainterTest.swift */,
@@ -1560,6 +1603,16 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				387EE7115F5FB01EF0995EDC /* LillyTheme.swift in Sources */,
+				A3C8FA130BDAAD25F9B87A62 /* HealthLogEntry.swift in Sources */,
+				640D2C6BAEB4D95BFBEE9C7F /* HealthLogStore.swift in Sources */,
+				D143CF97911BC47CF6E33779 /* LillyRootTabView.swift in Sources */,
+				4D647A8158C74CE879FF2426 /* LillyHomeView.swift in Sources */,
+				9D745BA76068446A8678C6FF /* LillyLogbookView.swift in Sources */,
+				AA2CC284D1F9BFB9B22E7D5A /* LillyLogSheets.swift in Sources */,
+				EC7A5CF9202C4501BC9B6CBF /* LillyExploreView.swift in Sources */,
+				D1AE4ECFE3537C594E9DAE76 /* LillyCareView.swift in Sources */,
+				F3ADE08FE990AAB15EF77A16 /* LillyMoreView.swift in Sources */,
 				D1D96CC321FB0FA80035A60E /* SnoozeMessage.swift in Sources */,
 				D1D1623C2218BF7A006F990A /* UIScreen+AnimatedBrightness.swift in Sources */,
 				D1BA903820D3046600A0EBD1 /* PaddingLabel.swift in Sources */,
@@ -1782,6 +1835,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				519750C06A822C33BDF726AB /* HealthLogEntry.swift in Sources */,
+				32CA3A4E367EDA8D3DC9F45C /* HealthLogStore.swift in Sources */,
+				C3F064421E560BB42BAECCCD /* HealthLogStoreTest.swift in Sources */,
 				4330663423AFB3C600690C4A /* Units.swift in Sources */,
 				4330663823AFB41200690C4A /* UnitsConverter.swift in Sources */,
 				4302C66A25DB0E000052777F /* TreatmentsStream.swift in Sources */,

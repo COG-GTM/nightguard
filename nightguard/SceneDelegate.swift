@@ -14,19 +14,19 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         
         guard let windowScene = (scene as? UIWindowScene) else { return }
         
-        let rootTabView = RootTabView()
+        let rootTabView = LillyRootTabView()
         let hostingController = UIHostingController(rootView: rootTabView)
 
         let window = UserInteractionDetectorWindow(windowScene: windowScene)
         window.frame = windowScene.coordinateSpace.bounds
         
-        // Always force a dark theme for nightguard. Otherwise e.g. the file picker would be white ^^
-        window.overrideUserInterfaceStyle = .dark
+        // The Lilly Health shell is a light UI; the legacy glucose screens opt back into dark via preferredColorScheme.
+        window.overrideUserInterfaceStyle = .light
         
         window.rootViewController = hostingController
         self.window = window
         window.makeKeyAndVisible()
-        window.tintColor = UIColor.nightguardAccent()
+        window.tintColor = LillyTheme.uiRed
         
         if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
             appDelegate.window = window
