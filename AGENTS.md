@@ -93,6 +93,12 @@ produces is `docs/PRD-LILLY-HEALTH-DASHBOARD.md` (protein per meal, clothed/uncl
 maintain vs. deficit goal, activity categories with miles and dumbbell load). Hand that PRD to a
 Devin session to implement the four requirements against `nightguard/lillyhealth/`.
 
+Prompts for the live run — the first two are Ask Devin questions, the third is a full session:
+
+1. *"In COG-GTM/nightguard, how does the Lilly Health logbook store food, weight and activity entries today?"*
+2. *"An App Store review asks for protein per meal, clothed/unclothed weigh-ins, a maintain-vs-deficit goal and activity categories — which of those can the current models express?"*
+3. *"Implement `docs/PRD-LILLY-HEALTH-DASHBOARD.md` in `nightguard/lillyhealth/` — keep the `HealthLogStore` snapshot backward compatible, update the entry forms, Home and Logbook, extend `HealthLogStoreTest`, and open a PR."*
+
 ## Demo: Ask Devin kickoff (issue #330)
 
 Progressive prompts for a live demo. The first two are lightweight Ask Devin questions; the third
