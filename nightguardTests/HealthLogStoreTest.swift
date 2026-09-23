@@ -130,6 +130,25 @@ class HealthLogStoreTest: XCTestCase {
         XCTAssertEqual(store.latestWeight(state: .clothed)?.pounds, 223)
     }
 
+    func testWeightProgressComparesReadingsInTheSameState() {
+        let store = makeStore()
+        let calendar = Calendar.current
+        let start = calendar.date(byAdding: .day, value: -30, to: Date())!
+
+        store.log(WeightEntry(date: start, pounds: 220, state: .unclothed))
+        store.log(WeightEntry(date: calendar.date(byAdding: .day, value: -1, to: Date())!, pounds: 218, state: .unclothed))
+        store.log(WeightEntry(date: Date(), pounds: 221, state: .clothed))
+
+        let progress = store.weightProgress
+        XCTAssertEqual(progress?.latest.pounds, 221)
+        XCTAssertEqual(progress?.start.pounds, 221)
+        XCTAssertEqual(progress?.latest.state, .clothed)
+
+        store.log(WeightEntry(date: Date().addingTimeInterval(60), pounds: 217.5, state: .unclothed))
+        XCTAssertEqual(store.weightProgress?.latest.pounds, 217.5)
+        XCTAssertEqual(store.weightProgress?.start.pounds, 220)
+    }
+
     func testWeightEntryDefaultsToUnclothedWhenStateIsAbsent() throws {
         let json = Data("""
         {"id":"\(UUID().uuidString)","date":0,"pounds":212.4}

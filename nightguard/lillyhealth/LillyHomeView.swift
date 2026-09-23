@@ -262,7 +262,9 @@ struct LillyHomeView: View {
                     }
                 }
             }
-            if let latest = store.latestWeight, let start = store.startingWeight {
+            if let progress = store.weightProgress {
+                let latest = progress.latest
+                let start = progress.start
                 LillyCard {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
@@ -277,7 +279,7 @@ struct LillyHomeView: View {
                                     .font(LillyTheme.body(13))
                                     .foregroundColor(LillyTheme.inkMuted)
                             }
-                            Text("\((start.pounds - latest.pounds).cleanValue) lbs since \(start.date.formatted(.dateTime.month(.abbreviated).day()))")
+                            Text("\((start.pounds - latest.pounds).cleanValue) lbs \(latest.state.title.lowercased()) since \(start.date.formatted(.dateTime.month(.abbreviated).day()))")
                                 .font(LillyTheme.body(13))
                                 .foregroundColor(LillyTheme.inkMuted)
                         }

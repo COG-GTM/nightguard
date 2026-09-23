@@ -250,6 +250,14 @@ final class HealthLogStore: ObservableObject {
         weights.first { $0.state == state }
     }
 
+    /// Newest reading paired with the oldest one taken the same way, so progress never
+    /// subtracts a clothed weight from an unclothed one.
+    var weightProgress: (start: WeightEntry, latest: WeightEntry)? {
+        guard let latest = weights.first,
+              let start = weights.last(where: { $0.state == latest.state }) else { return nil }
+        return (start, latest)
+    }
+
     // MARK: - Persistence
 
     private func load() {

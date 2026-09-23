@@ -88,6 +88,14 @@ struct LillyMoreView: View {
                 set: { store.maintenanceCalories = $0; store.applyDerivedCalorieTarget() })
     }
 
+    /// Describes the target actually in use, which may differ from the derived one after an override.
+    private var goalDescription: String {
+        let delta = store.maintenanceCalories - store.calorieTarget
+        if delta > 0 { return "Your target sits \(delta) cal below maintenance." }
+        if delta < 0 { return "Your target sits \(-delta) cal above maintenance." }
+        return "Your target matches your maintenance calories."
+    }
+
     private var goals: some View {
         VStack(alignment: .leading, spacing: 10) {
             LillySectionLabel("Goals")
@@ -97,9 +105,7 @@ struct LillyMoreView: View {
                         ForEach(WeightGoal.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
-                    Text(store.weightGoal == .deficit
-                         ? "Your target sits \(HealthLogStore.deficitCalories) cal below maintenance."
-                         : "Your target matches your maintenance calories.")
+                    Text(goalDescription)
                         .font(LillyTheme.body(12))
                         .foregroundColor(LillyTheme.inkMuted)
                     Divider()
