@@ -77,11 +77,50 @@ struct LillyMoreView: View {
         }
     }
 
+    /// Switching goal or maintenance re-derives the calorie target; the stepper below can still override it.
+    private var goalBinding: Binding<WeightGoal> {
+        Binding(get: { store.weightGoal },
+                set: { store.weightGoal = $0; store.applyDerivedCalorieTarget() })
+    }
+
+    private var maintenanceBinding: Binding<Int> {
+        Binding(get: { store.maintenanceCalories },
+                set: { store.maintenanceCalories = $0; store.applyDerivedCalorieTarget() })
+    }
+
+    /// Describes the target actually in use, which may differ from the derived one after an override.
+    private var goalDescription: String {
+        let delta = store.maintenanceCalories - store.calorieTarget
+        if delta > 0 { return "Your target sits \(delta) cal below maintenance." }
+        if delta < 0 { return "Your target sits \(-delta) cal above maintenance." }
+        return "Your target matches your maintenance calories."
+    }
+
     private var goals: some View {
         VStack(alignment: .leading, spacing: 10) {
             LillySectionLabel("Goals")
             LillyCard {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Picker("Goal", selection: goalBinding) {
+                        ForEach(WeightGoal.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    Text(goalDescription)
+                        .font(LillyTheme.body(12))
+                        .foregroundColor(LillyTheme.inkMuted)
+                    Divider()
+                    HStack {
+                        Text("Maintenance calories")
+                            .font(LillyTheme.body(15, weight: .medium))
+                            .foregroundColor(LillyTheme.ink)
+                        Spacer()
+                        Text("\(store.maintenanceCalories) cal")
+                            .font(LillyTheme.body(15, weight: .semibold))
+                            .foregroundColor(LillyTheme.ink)
+                    }
+                    Stepper("Maintenance calories", value: maintenanceBinding, in: 1200...5000, step: 50)
+                        .labelsHidden()
+                    Divider()
                     HStack {
                         Text("Daily calorie target")
                             .font(LillyTheme.body(15, weight: .medium))
@@ -92,6 +131,23 @@ struct LillyMoreView: View {
                             .foregroundColor(LillyTheme.ink)
                     }
                     Stepper("Daily calorie target", value: $store.calorieTarget, in: 1000...4000, step: 50)
+                        .labelsHidden()
+                    if store.isCalorieTargetOverridden {
+                        Button("Reset to \(store.derivedCalorieTarget) cal") { store.applyDerivedCalorieTarget() }
+                            .font(LillyTheme.body(13, weight: .semibold))
+                            .foregroundColor(LillyTheme.red)
+                    }
+                    Divider()
+                    HStack {
+                        Text("Daily protein target")
+                            .font(LillyTheme.body(15, weight: .medium))
+                            .foregroundColor(LillyTheme.ink)
+                        Spacer()
+                        Text("\(store.proteinTarget) g")
+                            .font(LillyTheme.body(15, weight: .semibold))
+                            .foregroundColor(LillyTheme.ink)
+                    }
+                    Stepper("Daily protein target", value: $store.proteinTarget, in: 20...300, step: 5)
                         .labelsHidden()
                 }
             }

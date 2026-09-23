@@ -18,6 +18,7 @@ struct LillyLogbookView: View {
     @State private var mode: Mode = .entries
     @State private var selectedDay = Date()
     @State private var activeSheet: LillyLogSheet?
+    @State private var trendWeighInState: WeighInState = .unclothed
 
     var body: some View {
         NavigationView {
@@ -82,7 +83,7 @@ struct LillyLogbookView: View {
                                     .foregroundColor(LillyTheme.inkMuted)
                             }
                             Spacer()
-                            Text("\(item.calories) cal")
+                            Text(item.proteinGrams.map { "\(item.calories) cal · \($0)g protein" } ?? "\(item.calories) cal")
                                 .font(LillyTheme.body(14, weight: .semibold))
                                 .foregroundColor(LillyTheme.ink)
                         }
@@ -97,7 +98,7 @@ struct LillyLogbookView: View {
                             .font(LillyTheme.body(13, weight: .semibold))
                             .foregroundColor(LillyTheme.inkMuted)
                         Spacer()
-                        Text("\(store.calories(on: selectedDay)) cal")
+                        Text("\(store.calories(on: selectedDay)) cal · \(store.protein(on: selectedDay))g protein")
                             .font(LillyTheme.body(14, weight: .bold))
                             .foregroundColor(LillyTheme.ink)
                     }
@@ -134,11 +135,25 @@ struct LillyLogbookView: View {
     }
 
     private var weightCard: some View {
-        entryCard(title: "Weight", systemImage: "scalemass", sheet: .weight) {
-            if let weight = store.weight(on: selectedDay) {
-                valueRow(value: weight.pounds.cleanValue, unit: "lbs", time: weight.date)
-            } else {
+        let items = store.weights.filter { Calendar.current.isDate($0.date, inSameDayAs: selectedDay) }
+        return entryCard(title: "Weight", systemImage: "scalemass", sheet: .weight) {
+            if items.isEmpty {
                 emptyRow("Track your weight")
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(items) { weight in
+                        VStack(alignment: .leading, spacing: 2) {
+                            valueRow(value: weight.pounds.cleanValue, unit: "lbs", time: weight.date)
+                            Text(weight.state.title)
+                                .font(LillyTheme.body(12))
+                                .foregroundColor(LillyTheme.inkMuted)
+                        }
+                        .padding(.vertical, 6)
+                        if weight.id != items.last?.id {
+                            Divider()
+                        }
+                    }
+                }
             }
         }
     }
@@ -155,7 +170,7 @@ struct LillyLogbookView: View {
                             Text(item.name)
                                 .font(LillyTheme.body(15, weight: .medium))
                                 .foregroundColor(LillyTheme.ink)
-                            Text(item.date, format: .dateTime.hour().minute())
+                            Text("\(item.summary) · \(item.date.formatted(.dateTime.hour().minute()))")
                                 .font(LillyTheme.body(12))
                                 .foregroundColor(LillyTheme.inkMuted)
                         }
@@ -280,11 +295,15 @@ struct LillyLogbookView: View {
     }
 
     private var weightTrend: some View {
-        let history = store.weightHistory(days: 90)
+        let history = store.weightHistory(days: 90, state: trendWeighInState)
         return LillyCard {
             VStack(alignment: .leading, spacing: 12) {
                 LillySectionLabel("Weight")
-                if let latest = store.latestWeight {
+                Picker("Weighed in", selection: $trendWeighInState) {
+                    ForEach(WeighInState.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let latest = history.last {
                     Text("Last entered weight \(latest.pounds.cleanValue) lbs")
                         .font(LillyTheme.body(15, weight: .semibold))
                         .foregroundColor(LillyTheme.ink)

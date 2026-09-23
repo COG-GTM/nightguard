@@ -167,8 +167,12 @@ struct LogWeightView: View {
     @EnvironmentObject private var store: HealthLogStore
     @Environment(\.presentationMode) private var presentationMode
 
+    /// Sticky across sheet presentations so a routine weigh-in keeps the same conditions.
+    @AppStorage("lillyHealth.lastWeighInState") private var lastState: String = WeighInState.unclothed.rawValue
+
     @State private var date = Date()
     @State private var pounds: Double = 0
+    @State private var state: WeighInState = .unclothed
 
     var body: some View {
         LillySheetScaffold(title: "Log Weight", primaryTitle: "Save Weight", primaryEnabled: pounds > 0, onPrimary: save) {
@@ -188,17 +192,29 @@ struct LogWeightView: View {
                         .labelsHidden()
                 }
             }
+            VStack(alignment: .leading, spacing: 8) {
+                LillyFieldLabel("Weighed in")
+                Picker("Weighed in", selection: $state) {
+                    ForEach(WeighInState.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text("Clothed and unclothed weigh-ins are trended separately.")
+                    .font(LillyTheme.body(12))
+                    .foregroundColor(LillyTheme.inkMuted)
+            }
             LillyDateField(date: $date)
         }
         .onAppear {
-            if pounds == 0, let latest = store.latestWeight {
+            state = WeighInState(rawValue: lastState) ?? .unclothed
+            if pounds == 0, let latest = store.latestWeight(state: state) ?? store.latestWeight {
                 pounds = latest.pounds
             }
         }
     }
 
     private func save() {
-        store.log(WeightEntry(date: date, pounds: (pounds * 10).rounded() / 10))
+        lastState = state.rawValue
+        store.log(WeightEntry(date: date, pounds: (pounds * 10).rounded() / 10, state: state))
         presentationMode.wrappedValue.dismiss()
     }
 }
@@ -212,6 +228,7 @@ struct LogFoodView: View {
     @State private var date = Date()
     @State private var name = ""
     @State private var calories: Int = 0
+    @State private var proteinGrams: Int = 0
     @State private var meal: MealType = .lunch
 
     var body: some View {
@@ -239,6 +256,19 @@ struct LogFoodView: View {
                                 .foregroundColor(LillyTheme.inkMuted)
                         }
                     }
+                    Divider()
+                    VStack(alignment: .leading, spacing: 8) {
+                        LillyFieldLabel("Protein (optional)")
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            TextField("0", value: $proteinGrams, format: .number)
+                                .keyboardType(.numberPad)
+                                .font(LillyTheme.display(32, weight: .semibold))
+                                .foregroundColor(LillyTheme.ink)
+                            Text("g")
+                                .font(LillyTheme.body(15))
+                                .foregroundColor(LillyTheme.inkMuted)
+                        }
+                    }
                 }
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -254,7 +284,8 @@ struct LogFoodView: View {
     }
 
     private func save() {
-        store.log(FoodEntry(date: date, name: name.trimmingCharacters(in: .whitespaces), calories: calories, meal: meal))
+        store.log(FoodEntry(date: date, name: name.trimmingCharacters(in: .whitespaces), calories: calories,
+                            meal: meal, proteinGrams: proteinGrams > 0 ? proteinGrams : nil))
         presentationMode.wrappedValue.dismiss()
     }
 }
@@ -280,8 +311,9 @@ struct LogActivityView: View {
     @State private var date = Date()
     @State private var name = ""
     @State private var minutes: Int = 30
-
-    private let suggestions = ["Walk", "Run", "Cycling", "Strength Training", "Yoga", "Swimming"]
+    @State private var category: ActivityCategory = .walk
+    @State private var miles: Double = 0
+    @State private var weightLbs: Double = 0
 
     var body: some View {
         LillySheetScaffold(title: "Log Activity", primaryTitle: "Save Activity",
@@ -297,13 +329,43 @@ struct LogActivityView: View {
                     }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
-                            ForEach(suggestions, id: \.self) { suggestion in
-                                Button(suggestion) { name = suggestion }
+                            ForEach(ActivityCategory.allCases) { option in
+                                Button(option.title) { select(option) }
                                     .font(LillyTheme.body(13, weight: .semibold))
-                                    .foregroundColor(name == suggestion ? .white : LillyTheme.ink)
+                                    .foregroundColor(category == option ? .white : LillyTheme.ink)
                                     .padding(.horizontal, 12)
                                     .padding(.vertical, 7)
-                                    .background(Capsule().fill(name == suggestion ? LillyTheme.red : LillyTheme.paper))
+                                    .background(Capsule().fill(category == option ? LillyTheme.red : LillyTheme.paper))
+                            }
+                        }
+                    }
+                    if category.measure == .distance {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            LillyFieldLabel("Distance")
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                TextField("0", value: $miles, format: .number.precision(.fractionLength(0...1)))
+                                    .keyboardType(.decimalPad)
+                                    .font(LillyTheme.display(32, weight: .semibold))
+                                    .foregroundColor(LillyTheme.ink)
+                                Text("mi")
+                                    .font(LillyTheme.body(15))
+                                    .foregroundColor(LillyTheme.inkMuted)
+                            }
+                        }
+                    }
+                    if category.measure == .load {
+                        Divider()
+                        VStack(alignment: .leading, spacing: 8) {
+                            LillyFieldLabel("Weight")
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                TextField("0", value: $weightLbs, format: .number.precision(.fractionLength(0...1)))
+                                    .keyboardType(.decimalPad)
+                                    .font(LillyTheme.display(32, weight: .semibold))
+                                    .foregroundColor(LillyTheme.ink)
+                                Text("lb")
+                                    .font(LillyTheme.body(15))
+                                    .foregroundColor(LillyTheme.inkMuted)
                             }
                         }
                     }
@@ -328,8 +390,19 @@ struct LogActivityView: View {
         }
     }
 
+    private func select(_ option: ActivityCategory) {
+        category = option
+        if name.trimmingCharacters(in: .whitespaces).isEmpty
+            || ActivityCategory.allCases.contains(where: { $0.title == name }) {
+            name = option.title
+        }
+    }
+
     private func save() {
-        store.log(ActivityEntry(date: date, name: name.trimmingCharacters(in: .whitespaces), minutes: minutes))
+        store.log(ActivityEntry(date: date, name: name.trimmingCharacters(in: .whitespaces), minutes: minutes,
+                                category: category,
+                                miles: category.measure == .distance && miles > 0 ? miles : nil,
+                                weightLbs: category.measure == .load && weightLbs > 0 ? weightLbs : nil))
         presentationMode.wrappedValue.dismiss()
     }
 }

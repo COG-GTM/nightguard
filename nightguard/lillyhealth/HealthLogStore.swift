@@ -15,6 +15,9 @@ final class HealthLogStore: ObservableObject {
 
     static let storageKey = "lillyHealth.logbook"
     static let defaultCalorieTarget = 1800
+    static let defaultProteinTarget = 100
+    /// A calorie deficit target sits this far below maintenance.
+    static let deficitCalories = 500
 
     @Published private(set) var food: [FoodEntry] = []
     @Published private(set) var weights: [WeightEntry] = []
@@ -22,6 +25,15 @@ final class HealthLogStore: ObservableObject {
     @Published private(set) var sleep: [SleepEntry] = []
     @Published private(set) var medications: [MedicationEntry] = []
     @Published var calorieTarget: Int = HealthLogStore.defaultCalorieTarget {
+        didSet { persist() }
+    }
+    @Published var proteinTarget: Int = HealthLogStore.defaultProteinTarget {
+        didSet { persist() }
+    }
+    @Published var maintenanceCalories: Int = HealthLogStore.defaultCalorieTarget {
+        didSet { persist() }
+    }
+    @Published var weightGoal: WeightGoal = .maintain {
         didSet { persist() }
     }
 
@@ -32,6 +44,9 @@ final class HealthLogStore: ObservableObject {
         var sleep: [SleepEntry]
         var medications: [MedicationEntry]
         var calorieTarget: Int
+        var proteinTarget: Int?
+        var maintenanceCalories: Int?
+        var weightGoal: WeightGoal?
     }
 
     private let defaults: UserDefaults
@@ -95,6 +110,9 @@ final class HealthLogStore: ObservableObject {
         sleep = []
         medications = []
         calorieTarget = HealthLogStore.defaultCalorieTarget
+        proteinTarget = HealthLogStore.defaultProteinTarget
+        maintenanceCalories = HealthLogStore.defaultCalorieTarget
+        weightGoal = .maintain
         persist()
     }
 
@@ -106,6 +124,35 @@ final class HealthLogStore: ObservableObject {
 
     func calories(on day: Date) -> Int {
         food(on: day).reduce(0) { $0 + $1.calories }
+    }
+
+    func protein(on day: Date) -> Int {
+        food(on: day).reduce(0) { $0 + ($1.proteinGrams ?? 0) }
+    }
+
+    /// Calorie target implied by the goal: maintenance in `.maintain`, 500 under it in `.deficit`.
+    var derivedCalorieTarget: Int {
+        switch weightGoal {
+        case .maintain: return maintenanceCalories
+        case .deficit: return max(maintenanceCalories - HealthLogStore.deficitCalories, 1000)
+        }
+    }
+
+    /// Resets the calorie target to the one implied by the current goal, discarding any override.
+    func applyDerivedCalorieTarget() {
+        calorieTarget = derivedCalorieTarget
+    }
+
+    var isCalorieTargetOverridden: Bool { calorieTarget != derivedCalorieTarget }
+
+    /// "500 under maintenance today" / "on target"
+    var calorieGoalCopy: String {
+        switch weightGoal {
+        case .deficit:
+            return "\(max(maintenanceCalories - calorieTarget, 0)) under maintenance today"
+        case .maintain:
+            return "on target"
+        }
     }
 
     func activities(on day: Date) -> [ActivityEntry] {
@@ -194,6 +241,23 @@ final class HealthLogStore: ObservableObject {
         return weights.filter { $0.date >= cutoff }.sorted { $0.date < $1.date }
     }
 
+    /// Weight history for a single clothing state, so clothed and unclothed trends stay separate.
+    func weightHistory(days: Int, state: WeighInState) -> [WeightEntry] {
+        weightHistory(days: days).filter { $0.state == state }
+    }
+
+    func latestWeight(state: WeighInState) -> WeightEntry? {
+        weights.first { $0.state == state }
+    }
+
+    /// Newest reading paired with the oldest one taken the same way, so progress never
+    /// subtracts a clothed weight from an unclothed one.
+    var weightProgress: (start: WeightEntry, latest: WeightEntry)? {
+        guard let latest = weights.first,
+              let start = weights.last(where: { $0.state == latest.state }) else { return nil }
+        return (start, latest)
+    }
+
     // MARK: - Persistence
 
     private func load() {
@@ -208,6 +272,9 @@ final class HealthLogStore: ObservableObject {
         sleep = snapshot.sleep
         medications = snapshot.medications
         calorieTarget = snapshot.calorieTarget
+        proteinTarget = snapshot.proteinTarget ?? HealthLogStore.defaultProteinTarget
+        maintenanceCalories = snapshot.maintenanceCalories ?? snapshot.calorieTarget
+        weightGoal = snapshot.weightGoal ?? .maintain
         isLoading = false
     }
 
@@ -219,7 +286,10 @@ final class HealthLogStore: ObservableObject {
             activities: activities,
             sleep: sleep,
             medications: medications,
-            calorieTarget: calorieTarget
+            calorieTarget: calorieTarget,
+            proteinTarget: proteinTarget,
+            maintenanceCalories: maintenanceCalories,
+            weightGoal: weightGoal
         )
         if let data = try? JSONEncoder().encode(snapshot) {
             defaults.set(data, forKey: HealthLogStore.storageKey)
@@ -251,30 +321,38 @@ final class HealthLogStore: ObservableObject {
             ))
         }
 
-        // Weekly weigh-ins drifting from 238 lbs to 224 lbs.
+        // Weekly weigh-ins drifting from 238 lbs to 224 lbs, morning unclothed plus an
+        // evening clothed reading that runs a few pounds heavy.
         let weightsLbs: [Double] = [238.4, 237.1, 235.8, 234.6, 233.0, 231.2, 229.5, 227.9, 226.4, 225.1, 224.0]
         for (index, pounds) in weightsLbs.enumerated() {
             let daysBack = (weightsLbs.count - 1 - index) * 7
-            weights.append(WeightEntry(date: daysAgo(daysBack, hour: 7), pounds: pounds))
+            weights.append(WeightEntry(date: daysAgo(daysBack, hour: 7), pounds: pounds, state: .unclothed))
+            weights.append(WeightEntry(date: daysAgo(daysBack, hour: daysBack == 0 ? 6 : 19),
+                                       pounds: pounds + 2.6, state: .clothed))
         }
 
         // The last few days of meals, movement and sleep.
-        food.append(FoodEntry(date: daysAgo(0, hour: 8), name: "Avocado Toast and Eggs", calories: 200, meal: .breakfast))
-        food.append(FoodEntry(date: daysAgo(0, hour: 12), name: "Grilled Chicken Salad", calories: 430, meal: .lunch))
-        food.append(FoodEntry(date: daysAgo(1, hour: 8), name: "Greek Yogurt and Berries", calories: 180, meal: .breakfast))
-        food.append(FoodEntry(date: daysAgo(1, hour: 13), name: "Turkey Wrap", calories: 410, meal: .lunch))
-        food.append(FoodEntry(date: daysAgo(1, hour: 19), name: "Salmon and Roasted Vegetables", calories: 560, meal: .dinner))
-        food.append(FoodEntry(date: daysAgo(2, hour: 8), name: "Oatmeal with Almonds", calories: 320, meal: .breakfast))
-        food.append(FoodEntry(date: daysAgo(2, hour: 19), name: "Chicken Stir-Fry", calories: 520, meal: .dinner))
+        food.append(FoodEntry(date: daysAgo(0, hour: 8), name: "Avocado Toast and Eggs", calories: 200, meal: .breakfast, proteinGrams: 14))
+        food.append(FoodEntry(date: daysAgo(0, hour: 12), name: "Grilled Chicken Salad", calories: 430, meal: .lunch, proteinGrams: 38))
+        food.append(FoodEntry(date: daysAgo(1, hour: 8), name: "Greek Yogurt and Berries", calories: 180, meal: .breakfast, proteinGrams: 18))
+        food.append(FoodEntry(date: daysAgo(1, hour: 13), name: "Turkey Wrap", calories: 410, meal: .lunch, proteinGrams: 32))
+        food.append(FoodEntry(date: daysAgo(1, hour: 19), name: "Salmon and Roasted Vegetables", calories: 560, meal: .dinner, proteinGrams: 44))
+        food.append(FoodEntry(date: daysAgo(2, hour: 8), name: "Oatmeal with Almonds", calories: 320, meal: .breakfast, proteinGrams: 12))
+        food.append(FoodEntry(date: daysAgo(2, hour: 19), name: "Chicken Stir-Fry", calories: 520, meal: .dinner, proteinGrams: 41))
 
-        activities.append(ActivityEntry(date: daysAgo(0, hour: 7), name: "Morning Walk", minutes: 32))
-        activities.append(ActivityEntry(date: daysAgo(1, hour: 18), name: "Strength Training", minutes: 45))
-        activities.append(ActivityEntry(date: daysAgo(2, hour: 7), name: "Morning Walk", minutes: 28))
-        activities.append(ActivityEntry(date: daysAgo(3, hour: 17), name: "Cycling", minutes: 40))
+        activities.append(ActivityEntry(date: daysAgo(0, hour: 7), name: "Morning Walk", minutes: 32, category: .walk, miles: 1.6))
+        activities.append(ActivityEntry(date: daysAgo(1, hour: 18), name: "Strength Training", minutes: 45, category: .strength, weightLbs: 45))
+        activities.append(ActivityEntry(date: daysAgo(2, hour: 7), name: "Morning Run", minutes: 28, category: .run, miles: 3.2))
+        activities.append(ActivityEntry(date: daysAgo(3, hour: 17), name: "Cycling", minutes: 40, category: .cycling, miles: 9.4))
 
         sleep.append(SleepEntry(date: daysAgo(0, hour: 6), hours: 7.4))
         sleep.append(SleepEntry(date: daysAgo(1, hour: 6), hours: 6.8))
         sleep.append(SleepEntry(date: daysAgo(2, hour: 6), hours: 7.9))
+
+        maintenanceCalories = 2300
+        weightGoal = .deficit
+        calorieTarget = derivedCalorieTarget
+        proteinTarget = HealthLogStore.defaultProteinTarget
 
         food.sort { $0.date > $1.date }
         weights.sort { $0.date > $1.date }
