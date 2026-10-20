@@ -7,6 +7,19 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A50A14CBD76E25BFC3A38068 /* CapitalIQWatchlistUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B00B3C1CF9FC161BE842F16 /* CapitalIQWatchlistUITests.swift */; };
+		95FCD651CC42B152793ABB36 /* WatchlistStoreTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = FED559C3433E22AAEAE9D449 /* WatchlistStoreTest.swift */; };
+		CC969FDB3C7DD6A5206817BB /* CapitalIQLayoutTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C3951ACB709141D6C47F9 /* CapitalIQLayoutTest.swift */; };
+		54415B862667FE166994730E /* WatchlistRouteTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1995F99D544EB9437CB52DBB /* WatchlistRouteTest.swift */; };
+		135495C93478891C08EE5828 /* CapitalIQLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0F6E6402D24689E91EA1AA /* CapitalIQLayout.swift */; };
+		D534213554D552269DCA8782 /* AppRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2664158E056C0D62DF9BBBD2 /* AppRouter.swift */; };
+		B2BE893503BA8E8693A0320F /* CapitalIQTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EC0D6CC11175985A41FF50B /* CapitalIQTabView.swift */; };
+		5C212C3252150B111A485097 /* CapitalIQSplitView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2072B7E63B6A6BF686BFF020 /* CapitalIQSplitView.swift */; };
+		04295BE45E4721E3F61D2111 /* WatchlistTableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F0699022F933D68E246A160 /* WatchlistTableView.swift */; };
+		DA05D633CFDC8CE12DBB26EA /* CapitalIQSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25B43CCBBE965C5AC20F7C2A /* CapitalIQSidebarView.swift */; };
+		C768CE13D8EC7DC26490A8A6 /* WindowOpener.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E2185A9E1EBC2A5F368FFEC /* WindowOpener.swift */; };
+		7216DE76784DF806C307CCCD /* CapitalIQLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0F6E6402D24689E91EA1AA /* CapitalIQLayout.swift */; };
+		F57DBC1A3A75758A10FD25B7 /* AppRouter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2664158E056C0D62DF9BBBD2 /* AppRouter.swift */; };
 		95A3AED6124EB29A17046505 /* WatchlistStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBBD02CBA90F1F29A0B8E6B2 /* WatchlistStore.swift */; };
 		76E399B145E5F4C9A430C646 /* MarketModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 89FEFEEBF5D7A28BC6B0A016 /* MarketModels.swift */; };
 		FBB5695F926C546554AFD1B0 /* CapitalIQRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EF0B27DBD7E1D1CBEA6C766 /* CapitalIQRootView.swift */; };
@@ -595,6 +608,17 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		6B00B3C1CF9FC161BE842F16 /* CapitalIQWatchlistUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQWatchlistUITests.swift; sourceTree = "<group>"; };
+		FED559C3433E22AAEAE9D449 /* WatchlistStoreTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistStoreTest.swift; sourceTree = "<group>"; };
+		543C3951ACB709141D6C47F9 /* CapitalIQLayoutTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQLayoutTest.swift; sourceTree = "<group>"; };
+		1995F99D544EB9437CB52DBB /* WatchlistRouteTest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistRouteTest.swift; sourceTree = "<group>"; };
+		4EC0D6CC11175985A41FF50B /* CapitalIQTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQTabView.swift; sourceTree = "<group>"; };
+		2072B7E63B6A6BF686BFF020 /* CapitalIQSplitView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQSplitView.swift; sourceTree = "<group>"; };
+		1F0699022F933D68E246A160 /* WatchlistTableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistTableView.swift; sourceTree = "<group>"; };
+		25B43CCBBE965C5AC20F7C2A /* CapitalIQSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQSidebarView.swift; sourceTree = "<group>"; };
+		0E2185A9E1EBC2A5F368FFEC /* WindowOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowOpener.swift; sourceTree = "<group>"; };
+		AC0F6E6402D24689E91EA1AA /* CapitalIQLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQLayout.swift; sourceTree = "<group>"; };
+		2664158E056C0D62DF9BBBD2 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
 		127F207A227F018E00C90F07 /* nightguard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nightguard.entitlements; sourceTree = "<group>"; };
 		28A3509723F9B31400F2AE60 /* fi-FI */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "fi-FI"; path = "fi-FI.lproj/LaunchScreen.strings"; sourceTree = "<group>"; };
 		28B03A3623F9CD8E000939E6 /* Base */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; lineEnding = 0; name = Base; path = Base.lproj/Localizable.strings; sourceTree = "<group>"; };
@@ -859,6 +883,13 @@
 		E0CF2D0CDE7D080EACBB1487 /* capitaliq */ = {
 			isa = PBXGroup;
 			children = (
+				4EC0D6CC11175985A41FF50B /* CapitalIQTabView.swift */,
+				2072B7E63B6A6BF686BFF020 /* CapitalIQSplitView.swift */,
+				1F0699022F933D68E246A160 /* WatchlistTableView.swift */,
+				25B43CCBBE965C5AC20F7C2A /* CapitalIQSidebarView.swift */,
+				0E2185A9E1EBC2A5F368FFEC /* WindowOpener.swift */,
+				AC0F6E6402D24689E91EA1AA /* CapitalIQLayout.swift */,
+				2664158E056C0D62DF9BBBD2 /* AppRouter.swift */,
 				206FC8EE2043543E77EC81D1 /* CapitalIQTheme.swift */,
 				89FEFEEBF5D7A28BC6B0A016 /* MarketModels.swift */,
 				CBBD02CBA90F1F29A0B8E6B2 /* WatchlistStore.swift */,
@@ -954,6 +985,9 @@
 		43647BE11BFF6435004389F9 /* nightguardTests */ = {
 			isa = PBXGroup;
 			children = (
+				FED559C3433E22AAEAE9D449 /* WatchlistStoreTest.swift */,
+				543C3951ACB709141D6C47F9 /* CapitalIQLayoutTest.swift */,
+				1995F99D544EB9437CB52DBB /* WatchlistRouteTest.swift */,
 				43647BE41BFF6435004389F9 /* Info.plist */,
 				4351E6B31D2EFDFF001E4AE4 /* AlarmRuleTest.swift */,
 				439C391A1C0E295C00D89872 /* ChartPainterTest.swift */,
@@ -973,6 +1007,7 @@
 		43647BEC1BFF6435004389F9 /* nightguardUITests */ = {
 			isa = PBXGroup;
 			children = (
+				6B00B3C1CF9FC161BE842F16 /* CapitalIQWatchlistUITests.swift */,
 				28E3B4F02404075800A4EE25 /* SnapshotHelper.swift */,
 				43647BED1BFF6435004389F9 /* NightguardUITests.swift */,
 				43647BEF1BFF6435004389F9 /* Info.plist */,
@@ -1592,6 +1627,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B2BE893503BA8E8693A0320F /* CapitalIQTabView.swift in Sources */,
+				5C212C3252150B111A485097 /* CapitalIQSplitView.swift in Sources */,
+				04295BE45E4721E3F61D2111 /* WatchlistTableView.swift in Sources */,
+				DA05D633CFDC8CE12DBB26EA /* CapitalIQSidebarView.swift in Sources */,
+				C768CE13D8EC7DC26490A8A6 /* WindowOpener.swift in Sources */,
+				7216DE76784DF806C307CCCD /* CapitalIQLayout.swift in Sources */,
+				F57DBC1A3A75758A10FD25B7 /* AppRouter.swift in Sources */,
 				FBB5695F926C546554AFD1B0 /* CapitalIQRootView.swift in Sources */,
 				CC2F2C8692B6B67C7D60CBBC /* CapitalIQMoreView.swift in Sources */,
 				39212DEF97C433AD56B73C00 /* WatchlistDetailView.swift in Sources */,
@@ -1730,6 +1772,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				95FCD651CC42B152793ABB36 /* WatchlistStoreTest.swift in Sources */,
+				CC969FDB3C7DD6A5206817BB /* CapitalIQLayoutTest.swift in Sources */,
+				54415B862667FE166994730E /* WatchlistRouteTest.swift in Sources */,
+				135495C93478891C08EE5828 /* CapitalIQLayout.swift in Sources */,
+				D534213554D552269DCA8782 /* AppRouter.swift in Sources */,
 				95A3AED6124EB29A17046505 /* WatchlistStore.swift in Sources */,
 				76E399B145E5F4C9A430C646 /* MarketModels.swift in Sources */,
 				4351E6B41D2EFDFF001E4AE4 /* AlarmRuleTest.swift in Sources */,
@@ -1827,6 +1874,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A50A14CBD76E25BFC3A38068 /* CapitalIQWatchlistUITests.swift in Sources */,
 				4330663423AFB3C600690C4A /* Units.swift in Sources */,
 				4330663823AFB41200690C4A /* UnitsConverter.swift in Sources */,
 				4302C66A25DB0E000052777F /* TreatmentsStream.swift in Sources */,

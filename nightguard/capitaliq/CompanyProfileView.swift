@@ -2,30 +2,74 @@
 //  CompanyProfileView.swift
 //  nightguard
 //
-//  Mobile corporate profile: a single scroll from snapshot to officers.
+//  Corporate profile. Compact width stacks every card in one scroll; at
+//  regular width it becomes two panes (fundamentals | news & people).
 //
 
 import SwiftUI
 
 struct CompanyProfileView: View {
+    @EnvironmentObject private var store: WatchlistStore
     let instrument: Instrument
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                CompanyHeaderCard(instrument: instrument)
-                CompanySnapshotCard(instrument: instrument)
-                CompanyNewsCard(instrument: instrument)
-                CompanyKeyDevelopmentsCard(instrument: instrument)
-                CompanyFinancialsCard(instrument: instrument)
-                CompanyEstimatesCard(instrument: instrument)
-                CompanyOfficersCard(instrument: instrument)
+        GeometryReader { geometry in
+            ScrollView {
+                if CapitalIQLayout.profileUsesTwoPanes(width: geometry.size.width) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        CompanyHeaderCard(instrument: instrument)
+                        HStack(alignment: .top, spacing: 16) {
+                            VStack(spacing: 16) {
+                                CompanySnapshotCard(instrument: instrument)
+                                CompanyFinancialsCard(instrument: instrument)
+                                CompanyEstimatesCard(instrument: instrument)
+                            }
+                            VStack(spacing: 16) {
+                                CompanyNewsCard(instrument: instrument)
+                                CompanyKeyDevelopmentsCard(instrument: instrument)
+                                CompanyOfficersCard(instrument: instrument)
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .accessibilityIdentifier("company_profile_two_pane")
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        CompanyHeaderCard(instrument: instrument)
+                        CompanySnapshotCard(instrument: instrument)
+                        CompanyNewsCard(instrument: instrument)
+                        CompanyKeyDevelopmentsCard(instrument: instrument)
+                        CompanyFinancialsCard(instrument: instrument)
+                        CompanyEstimatesCard(instrument: instrument)
+                        CompanyOfficersCard(instrument: instrument)
+                    }
+                    .padding(16)
+                    .accessibilityIdentifier("company_profile_stacked")
+                }
             }
-            .padding(16)
         }
         .background(CapitalIQTheme.canvas)
         .navigationTitle(instrument.ticker)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigationBarTrailing) {
+                Menu {
+                    ForEach(store.watchlists) { watchlist in
+                        Button(watchlist.name) { store.add(ticker: instrument.ticker, to: watchlist.id) }
+                    }
+                } label: {
+                    Label("Add to Watchlist", systemImage: "plus.circle")
+                }
+                if WindowOpener.supportsMultipleWindows {
+                    Button {
+                        WindowOpener.open(.company(ticker: instrument.ticker))
+                    } label: {
+                        Label("Open in New Window", systemImage: "square.split.2x1")
+                    }
+                    .accessibilityIdentifier("profile_open_new_window")
+                }
+            }
+        }
         .accessibilityIdentifier("company_profile_\(instrument.ticker)")
     }
 }
@@ -51,6 +95,21 @@ struct CompanyHeaderCard: View {
                 Text("Delayed · USD · Last updated 16:00 ET")
                     .font(.system(size: 11))
                     .foregroundColor(CapitalIQTheme.inkMuted)
+            }
+        }
+        .draggable(instrument.ticker)
+        .contextMenu {
+            if WindowOpener.supportsMultipleWindows {
+                Button {
+                    WindowOpener.open(.company(ticker: instrument.ticker))
+                } label: {
+                    Label("Open in New Window", systemImage: "square.split.2x1")
+                }
+            }
+            Button {
+                UIPasteboard.general.url = WatchlistRoute.company(ticker: instrument.ticker).universalLink
+            } label: {
+                Label("Copy Link", systemImage: "link")
             }
         }
     }

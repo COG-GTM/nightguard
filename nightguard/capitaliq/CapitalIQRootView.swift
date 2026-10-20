@@ -2,23 +2,52 @@
 //  CapitalIQRootView.swift
 //  nightguard
 //
-//  S&P Capital IQ Pro shell: News · Markets · Search · Alerts · More.
-//  The same phone tab bar is used on every device.
+//  Adaptive S&P Capital IQ Pro shell. Compact width (iPhone, Slide Over,
+//  1/3 Split View) gets the tab bar; regular width gets the three-column
+//  NavigationSplitView. ⌘ shortcuts are routed through
+//  CapitalIQHostingController.
 //
 
 import SwiftUI
 import UIKit
 
-enum CapitalIQTab: Hashable {
-    case news, markets, search, alerts, more
-}
-
 struct CapitalIQRootView: View {
 
-    @StateObject private var store = WatchlistStore.shared
-    @State private var selectedTab: CapitalIQTab = .news
+    @ObservedObject var router: AppRouter
+    @StateObject private var store: WatchlistStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
-    init() {
+    init(router: AppRouter) {
+        self.router = router
+        _store = StateObject(wrappedValue: router.store)
+        CapitalIQRootView.configureAppearance()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let layout: CapitalIQColumnLayout = horizontalSizeClass == .compact ? .stacked : CapitalIQLayout.columnLayout(forWidth: geometry.size.width)
+            Group {
+                if layout == .stacked {
+                    CapitalIQTabView()
+                } else {
+                    CapitalIQSplitView(layout: layout)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
+        }
+        .accentColor(CapitalIQTheme.red)
+        .environmentObject(store)
+        .environmentObject(router)
+        .onAppear {
+            if UIDevice.current.userInterfaceIdiom == .phone {
+                AppDelegate.updateOrientationLock(.portrait, rotateTo: .portrait)
+            } else {
+                AppDelegate.updateOrientationLock(.all)
+            }
+        }
+    }
+
+    static func configureAppearance() {
         let appearance = UITabBarAppearance()
         appearance.configureWithOpaqueBackground()
         appearance.backgroundColor = .white
@@ -40,44 +69,51 @@ struct CapitalIQRootView: View {
         UINavigationBar.appearance().compactAppearance = navAppearance
         UINavigationBar.appearance().tintColor = .white
     }
-
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            NavigationView { NewsFeedView() }
-                .navigationViewStyle(.stack)
-                .tabItem { Label("News", systemImage: "newspaper") }
-                .tag(CapitalIQTab.news)
-
-            NavigationView { MarketsView() }
-                .navigationViewStyle(.stack)
-                .tabItem { Label("Markets", systemImage: "chart.xyaxis.line") }
-                .tag(CapitalIQTab.markets)
-
-            NavigationView { SearchView() }
-                .navigationViewStyle(.stack)
-                .tabItem { Label("Search", systemImage: "magnifyingglass") }
-                .tag(CapitalIQTab.search)
-
-            NavigationView { AlertsView() }
-                .navigationViewStyle(.stack)
-                .tabItem { Label("Alerts", systemImage: "bell") }
-                .tag(CapitalIQTab.alerts)
-
-            NavigationView { CapitalIQMoreView() }
-                .navigationViewStyle(.stack)
-                .tabItem { Label("More", systemImage: "ellipsis") }
-                .tag(CapitalIQTab.more)
-        }
-        .accentColor(CapitalIQTheme.red)
-        .environmentObject(store)
-        .onAppear {
-            AppDelegate.updateOrientationLock(.portrait, rotateTo: .portrait)
-        }
-    }
 }
 
-struct CapitalIQRootView_Previews: PreviewProvider {
-    static var previews: some View {
-        CapitalIQRootView()
+/// Hosts the root view and exposes hardware-keyboard shortcuts
+/// (⌘1 watchlists, ⌘F search, ⌘↑ / ⌘↓ switch watchlist).
+final class CapitalIQHostingController: UIHostingController<CapitalIQRootView> {
+
+    private let router: AppRouter
+
+    init(router: AppRouter) {
+        self.router = router
+        super.init(rootView: CapitalIQRootView(router: router))
+    }
+
+    @available(*, unavailable)
+    required init?(coder aDecoder: NSCoder) {
+        fatalError("init(coder:) is not supported")
+    }
+
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        [
+            command("1", title: "Watchlists"),
+            command("f", title: "Search"),
+            command(UIKeyCommand.inputUpArrow, title: "Previous Watchlist"),
+            command(UIKeyCommand.inputDownArrow, title: "Next Watchlist"),
+        ]
+    }
+
+    private func command(_ input: String, title: String) -> UIKeyCommand {
+        let command = UIKeyCommand(title: title, action: #selector(handleKeyCommand(_:)), input: input, modifierFlags: .command)
+        command.wantsPriorityOverSystemBehavior = true
+        return command
+    }
+
+    @objc private func handleKeyCommand(_ sender: UIKeyCommand) {
+        guard let input = sender.input, let command = CapitalIQKeyCommand(key: CapitalIQHostingController.keyName(for: input), command: sender.modifierFlags.contains(.command)) else { return }
+        router.handle(command)
+    }
+
+    static func keyName(for input: String) -> String {
+        switch input {
+        case UIKeyCommand.inputUpArrow: return "up"
+        case UIKeyCommand.inputDownArrow: return "down"
+        default: return input
+        }
     }
 }
