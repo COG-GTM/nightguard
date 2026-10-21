@@ -28,7 +28,9 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         
         let hostingController = CapitalIQHostingController(router: router)
 
-        let window = UserInteractionDetectorWindow(windowScene: windowScene)
+        // Plain UIWindow: the legacy idle-dimming window changes UIScreen.main.brightness
+        // globally, which would blank the active window when another scene goes idle.
+        let window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.coordinateSpace.bounds
         
         // Capital IQ Pro is a light UI; the legacy glucose screens are no longer the root.
@@ -39,9 +41,8 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         window.tintColor = CapitalIQTheme.uiRed
         
-        if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+        if let appDelegate = UIApplication.shared.delegate as? AppDelegate, appDelegate.window == nil {
             appDelegate.window = window
-            appDelegate.dimScreenOnIdle()
         }
     }
 

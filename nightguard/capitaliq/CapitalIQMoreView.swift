@@ -19,6 +19,10 @@ struct CapitalIQMoreView: View {
                 NavigationLink(destination: PlaceholderScreen(title: "Saved Items", message: "Smart Download keeps your saved articles, transcripts and documents available offline.")) {
                     Label("Saved Items", systemImage: "arrow.down.circle")
                 }
+                NavigationLink(destination: AlertsView()) {
+                    Label("Alerts", systemImage: "bell.badge")
+                }
+                .accessibilityIdentifier("more_alerts")
                 NavigationLink(destination: PlaceholderScreen(title: "Manage Alerts", message: "Choose which email alerts are delivered as mobile push notifications.")) {
                     Label("Manage Alerts", systemImage: "bell")
                 }

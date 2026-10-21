@@ -189,6 +189,7 @@ final class AppRouter: ObservableObject {
         switch route {
         case .watchlists:
             section = .watchlists
+            selectedWatchlistID = nil
             selectedTicker = nil
             watchlistStack = []
         case .watchlist(let id):

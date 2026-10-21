@@ -14,9 +14,20 @@ struct CapitalIQSplitView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
+        Group {
+            if layout == .threeColumn {
+                threeColumnView
+            } else {
+                twoColumnView
+            }
+        }
+        .accessibilityIdentifier("capitaliq_split_view")
+    }
+
+    /// Full-screen landscape: sidebar · list · detail.
+    private var threeColumnView: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
-            CapitalIQSidebarView()
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+            sidebar
         } content: {
             NavigationStack {
                 contentColumn
@@ -28,11 +39,38 @@ struct CapitalIQSplitView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .onAppear { columnVisibility = layout == .threeColumn ? .all : .doubleColumn }
-        .onChange(of: layout) { newValue in
-            columnVisibility = newValue == .threeColumn ? .all : .doubleColumn
+        .onAppear { columnVisibility = .all }
+    }
+
+    /// 1/2 and 2/3 Split View (600–999pt): the sidebar stays visible and the
+    /// company profile is pushed onto the content column instead of a third column.
+    private var twoColumnView: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+        } detail: {
+            NavigationStack {
+                contentColumn
+                    .navigationDestination(isPresented: companyPresented) {
+                        if let instrument = router.selectedInstrument {
+                            CompanyProfileView(instrument: instrument)
+                        }
+                    }
+            }
         }
-        .accessibilityIdentifier("capitaliq_split_view")
+        .navigationSplitViewStyle(.balanced)
+        .onAppear { columnVisibility = .all }
+    }
+
+    private var sidebar: some View {
+        CapitalIQSidebarView()
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+    }
+
+    private var companyPresented: Binding<Bool> {
+        Binding(
+            get: { router.selectedInstrument != nil },
+            set: { if !$0 { router.select(ticker: nil) } }
+        )
     }
 
     @ViewBuilder
