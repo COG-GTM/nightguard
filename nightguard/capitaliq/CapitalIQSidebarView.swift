@@ -63,6 +63,7 @@ struct CapitalIQSidebarView: View {
                         Image(systemName: "list.star")
                     }
                     .tag(CapitalIQSidebarItem.watchlist(watchlist.id))
+                    .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("sidebar_watchlist_\(watchlist.id)")
                     .listRowBackground(dropTarget == watchlist.id ? CapitalIQTheme.red.opacity(0.15) : nil)
                     .contextMenu {
