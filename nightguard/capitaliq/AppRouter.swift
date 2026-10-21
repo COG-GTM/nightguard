@@ -217,6 +217,7 @@ final class AppRouter: ObservableObject {
     func select(ticker: String?) {
         guard let ticker else {
             selectedTicker = nil
+            watchlistStack.removeAll { if case .company = $0 { return true } else { return false } }
             return
         }
         navigate(to: .company(ticker: ticker))
