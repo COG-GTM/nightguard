@@ -11,10 +11,11 @@ class CapitalIQLayoutTest: XCTestCase {
         XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 320), .stacked)   // Slide Over
         XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 375), .stacked)   // 1/3 Split View
         XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 390), .stacked)   // iPhone
+        XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 592), .stacked)   // 1/2 Split View on 11" (iOS reports compact width here)
     }
 
     func testHalfAndTwoThirdsSplitUseTwoColumns() {
-        XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 507), .twoColumn)  // 1/2 Split View on 11"
+        XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 678), .twoColumn)  // 1/2 Split View on 13"
         XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 694), .twoColumn)  // 2/3 Split View on 11"
         XCTAssertEqual(CapitalIQLayout.columnLayout(forWidth: 834), .twoColumn)  // iPad portrait
     }
