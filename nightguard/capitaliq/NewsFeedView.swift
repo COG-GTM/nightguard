@@ -71,7 +71,19 @@ struct NewsCard: View {
 }
 
 struct NewsFeedView: View {
+    @EnvironmentObject private var store: WatchlistStore
     @State private var sortByRelevance = false
+
+    /// Relevance = stories mentioning the most watched tickers first, recency as the tie-breaker.
+    private var sortedNews: [NewsItem] {
+        guard sortByRelevance else { return SampleMarketData.news }
+        let watched = Set(store.watchlists.flatMap(\.tickers))
+        return SampleMarketData.news.enumerated().sorted { lhs, rhs in
+            let l = lhs.element.tickers.filter(watched.contains).count
+            let r = rhs.element.tickers.filter(watched.contains).count
+            return l != r ? l > r : lhs.offset < rhs.offset
+        }.map(\.element)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -88,7 +100,7 @@ struct NewsFeedView: View {
                         .pickerStyle(.segmented)
                         .frame(maxWidth: 220)
                     }
-                    ForEach(sortByRelevance ? SampleMarketData.news.reversed() : SampleMarketData.news) { item in
+                    ForEach(sortedNews) { item in
                         NewsCard(item: item)
                     }
                 }

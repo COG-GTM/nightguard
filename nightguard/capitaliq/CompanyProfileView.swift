@@ -123,17 +123,22 @@ struct CompanyFinancialsCard: View {
         CapitalIQCard {
             VStack(alignment: .leading, spacing: 10) {
                 CapitalIQSectionTitle("Financials (USD)")
-                HStack {
-                    Text("").frame(maxWidth: .infinity, alignment: .leading)
-                    ForEach(SampleMarketData.financialPeriods, id: \.self) { period in
-                        Text(period).font(.system(size: 11, weight: .semibold)).foregroundColor(CapitalIQTheme.inkMuted).frame(width: 64, alignment: .trailing)
-                    }
-                }
-                ForEach(SampleMarketData.financials(for: instrument)) { row in
-                    HStack {
-                        Text(row.label).font(.system(size: 13)).foregroundColor(CapitalIQTheme.ink).frame(maxWidth: .infinity, alignment: .leading)
-                        ForEach(Array(row.values.enumerated()), id: \.offset) { _, value in
-                            Text(value).font(CapitalIQTheme.numeric(13)).foregroundColor(CapitalIQTheme.ink).frame(width: 64, alignment: .trailing)
+                // Fixed label column + horizontal scrolling so metric names never collapse on phones.
+                ScrollView(.horizontal, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("").frame(width: 128, alignment: .leading)
+                            ForEach(SampleMarketData.financialPeriods, id: \.self) { period in
+                                Text(period).font(.system(size: 11, weight: .semibold)).foregroundColor(CapitalIQTheme.inkMuted).frame(width: 64, alignment: .trailing)
+                            }
+                        }
+                        ForEach(SampleMarketData.financials(for: instrument)) { row in
+                            HStack {
+                                Text(row.label).font(.system(size: 13)).foregroundColor(CapitalIQTheme.ink).frame(width: 128, alignment: .leading)
+                                ForEach(Array(row.values.enumerated()), id: \.offset) { _, value in
+                                    Text(value).font(CapitalIQTheme.numeric(13)).foregroundColor(CapitalIQTheme.ink).frame(width: 64, alignment: .trailing)
+                                }
+                            }
                         }
                     }
                 }
