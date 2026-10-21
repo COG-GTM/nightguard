@@ -619,6 +619,17 @@
 		0E2185A9E1EBC2A5F368FFEC /* WindowOpener.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowOpener.swift; sourceTree = "<group>"; };
 		AC0F6E6402D24689E91EA1AA /* CapitalIQLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQLayout.swift; sourceTree = "<group>"; };
 		2664158E056C0D62DF9BBBD2 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
+		206FC8EE2043543E77EC81D1 /* CapitalIQTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQTheme.swift; sourceTree = "<group>"; };
+		89FEFEEBF5D7A28BC6B0A016 /* MarketModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketModels.swift; sourceTree = "<group>"; };
+		CBBD02CBA90F1F29A0B8E6B2 /* WatchlistStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistStore.swift; sourceTree = "<group>"; };
+		CFF9D261D41BD440DC8DB716 /* NewsFeedView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewsFeedView.swift; sourceTree = "<group>"; };
+		4F3F3FD17D663E1D35983965 /* MarketsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarketsView.swift; sourceTree = "<group>"; };
+		CB4185FB4F34E4DCE61E447B /* SearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchView.swift; sourceTree = "<group>"; };
+		C2D714FC726D0A3546D69A1C /* AlertsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertsView.swift; sourceTree = "<group>"; };
+		D3C99B676922B16748E8DE1F /* CompanyProfileView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompanyProfileView.swift; sourceTree = "<group>"; };
+		715DBA79670DC25DD068C8E8 /* WatchlistDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchlistDetailView.swift; sourceTree = "<group>"; };
+		231529EA284088D0FAA48B14 /* CapitalIQMoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQMoreView.swift; sourceTree = "<group>"; };
+		5EF0B27DBD7E1D1CBEA6C766 /* CapitalIQRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapitalIQRootView.swift; sourceTree = "<group>"; };
 		127F207A227F018E00C90F07 /* nightguard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = nightguard.entitlements; sourceTree = "<group>"; };
 		28A3509723F9B31400F2AE60 /* fi-FI */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = "fi-FI"; path = "fi-FI.lproj/LaunchScreen.strings"; sourceTree = "<group>"; };
 		28B03A3623F9CD8E000939E6 /* Base */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; lineEnding = 0; name = Base; path = Base.lproj/Localizable.strings; sourceTree = "<group>"; };
