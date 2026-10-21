@@ -429,9 +429,6 @@ class UserDefaultsRepository {
     /// Watchlist shown on cold launch; empty string opens News.
     static let defaultWatchlistID = UserDefaultsValue<String>(key: "capitaliq.defaultWatchlistID", default: "")
 
-    /// Visible columns of the regular-width watchlist table (WatchlistColumn raw values).
-    static let watchlistColumns = UserDefaultsValue<[String]>(key: "capitaliq.watchlistColumns", default: WatchlistColumn.defaultVisible.map(\.rawValue))
-
     static let appleHealthLastSyncDate = UserDefaultsValue<Date>(key: "appleHealthLastSyncDate", default: .distantPast)
 
     // Pro Promotion

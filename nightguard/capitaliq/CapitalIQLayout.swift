@@ -114,3 +114,9 @@ extension Instrument {
         }
     }
 }
+
+extension UserDefaultsRepository {
+    /// Visible columns of the regular-width watchlist table (WatchlistColumn raw values).
+    /// Lives here (iOS app target only) because UserDefaultsRepository is shared with the watch and widget targets.
+    static let watchlistColumns = UserDefaultsValue<[String]>(key: "capitaliq.watchlistColumns", default: WatchlistColumn.defaultVisible.map(\.rawValue))
+}
