@@ -424,6 +424,11 @@ class UserDefaultsRepository {
     
     static let currentTab = UserDefaultsValue<TabIdentifier>(key: "rootTabView.currentTab", default: .main)
 
+    // MARK: - Capital IQ Pro
+
+    /// Watchlist shown on cold launch; empty string opens News.
+    static let defaultWatchlistID = UserDefaultsValue<String>(key: "capitaliq.defaultWatchlistID", default: "")
+
     static let appleHealthLastSyncDate = UserDefaultsValue<Date>(key: "appleHealthLastSyncDate", default: .distantPast)
 
     // Pro Promotion

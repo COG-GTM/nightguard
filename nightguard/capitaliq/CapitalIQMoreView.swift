@@ -19,6 +19,10 @@ struct CapitalIQMoreView: View {
                 NavigationLink(destination: PlaceholderScreen(title: "Saved Items", message: "Smart Download keeps your saved articles, transcripts and documents available offline.")) {
                     Label("Saved Items", systemImage: "arrow.down.circle")
                 }
+                NavigationLink(destination: AlertsView()) {
+                    Label("Alerts", systemImage: "bell.badge")
+                }
+                .accessibilityIdentifier("more_alerts")
                 NavigationLink(destination: PlaceholderScreen(title: "Manage Alerts", message: "Choose which email alerts are delivered as mobile push notifications.")) {
                     Label("Manage Alerts", systemImage: "bell")
                 }
@@ -64,11 +68,25 @@ struct SavedListsView: View {
 }
 
 struct CapitalIQSettingsView: View {
+    @EnvironmentObject private var store: WatchlistStore
     @State private var faceID = true
     @State private var autoLock = "15 minutes"
+    @State private var defaultWatchlistID = UserDefaultsRepository.defaultWatchlistID.value
 
     var body: some View {
         Form {
+            Section {
+                Picker("Default Watchlist", selection: $defaultWatchlistID) {
+                    Text("None (open News)").tag("")
+                    ForEach(store.watchlists) { Text($0.name).tag($0.id) }
+                }
+                .accessibilityIdentifier("settings_default_watchlist")
+                .onChange(of: defaultWatchlistID) { UserDefaultsRepository.defaultWatchlistID.value = $0 }
+            } header: {
+                Text("Launch")
+            } footer: {
+                Text("Open this watchlist directly when Capital IQ Pro launches.")
+            }
             Section("Security") {
                 Toggle("Face ID", isOn: $faceID)
                 Picker("Auto-Lock", selection: $autoLock) {

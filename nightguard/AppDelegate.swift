@@ -34,7 +34,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     private var hasEnteredBackground = false
     
     /// Global orientation lock - allow controlling allowed orientations from anywhere
-    static var orientationLock = UIInterfaceOrientationMask.portrait
+    static var orientationLock: UIInterfaceOrientationMask = UIDevice.current.userInterfaceIdiom == .pad ? .all : .portrait
 
     static func updateOrientationLock(_ lock: UIInterfaceOrientationMask, rotateTo orientation: UIInterfaceOrientation? = nil) {
         orientationLock = lock
@@ -55,7 +55,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             if let orientation = orientation {
                 UIDevice.current.setValue(orientation.rawValue, forKey: "orientation")
             }
-            UINavigationController.attemptRotationToDeviceOrientation()
             return
         }
 

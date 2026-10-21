@@ -2,26 +2,53 @@
 //  SearchView.swift
 //  nightguard
 //
-//  Company search across public and private profiles.
+//  Company search across public and private profiles. ⌘F (via AppRouter)
+//  focuses the search field.
 //
 
 import SwiftUI
 
 struct SearchView: View {
     @EnvironmentObject private var store: WatchlistStore
+    @EnvironmentObject private var router: AppRouter
     @State private var query = ""
-    var isSearchFieldFocused: FocusState<Bool>.Binding? = nil
+    @FocusState private var isSearchFieldFocused: Bool
 
     var body: some View {
-        List(store.search(query)) { instrument in
-            NavigationLink(destination: CompanyProfileView(instrument: instrument)) {
-                InstrumentRow(instrument: instrument)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundColor(CapitalIQTheme.inkMuted)
+                TextField("Search companies, tickers, people", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .focused($isSearchFieldFocused)
+                    .submitLabel(.search)
+                    .accessibilityIdentifier("company_search_field")
+                if !query.isEmpty {
+                    Button { query = "" } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(CapitalIQTheme.inkMuted)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
+            .padding(10)
+            .background(CapitalIQTheme.canvas)
+            .cornerRadius(10)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            Divider()
+            List(store.search(query)) { instrument in
+                NavigationLink(destination: CompanyProfileView(instrument: instrument)) {
+                    InstrumentRow(instrument: instrument)
+                }
+                .draggable(instrument.ticker)
+            }
+            .listStyle(.plain)
         }
-        .listStyle(.plain)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search companies, tickers, people")
         .navigationTitle("Search")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { if router.searchFocusRequest > 0 { isSearchFieldFocused = true } }
+        .onChange(of: router.searchFocusRequest) { _ in isSearchFieldFocused = true }
         .accessibilityIdentifier("company_search")
     }
 }

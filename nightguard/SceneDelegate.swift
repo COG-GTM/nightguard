@@ -9,15 +9,28 @@ import SwiftUI
 class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     var window: UIWindow?
+    private(set) var router: AppRouter?
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         
         guard let windowScene = (scene as? UIWindowScene) else { return }
         
-        let rootTabView = CapitalIQRootView()
-        let hostingController = UIHostingController(rootView: rootTabView)
+        let defaultWatchlistID = ProcessInfo.processInfo.environment["CAPITALIQ_DEFAULT_WATCHLIST"] ?? UserDefaultsRepository.defaultWatchlistID.value
+        let router = AppRouter(store: .shared, defaultWatchlistID: defaultWatchlistID)
+        self.router = router
+        if let activity = connectionOptions.userActivities.first ?? session.stateRestorationActivity {
+            router.handle(userActivity: activity)
+        }
+        connectionOptions.urlContexts.forEach { router.handle(url: $0.url) }
+        
+        scene.title = router.currentRoute.map { "Capital IQ Pro · \($0.title)" } ?? "Capital IQ Pro"
+        windowScene.sizeRestrictions?.minimumSize = CapitalIQLayout.stageManagerMinimumSize
+        
+        let hostingController = CapitalIQHostingController(router: router)
 
-        let window = UserInteractionDetectorWindow(windowScene: windowScene)
+        // Plain UIWindow: the legacy idle-dimming window changes UIScreen.main.brightness
+        // globally, which would blank the active window when another scene goes idle.
+        let window = UIWindow(windowScene: windowScene)
         window.frame = windowScene.coordinateSpace.bounds
         
         // Capital IQ Pro is a light UI; the legacy glucose screens are no longer the root.
@@ -28,14 +41,25 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         window.tintColor = CapitalIQTheme.uiRed
         
-        if let appDelegate = UIApplication.shared.delegate as? AppDelegate {
+        if let appDelegate = UIApplication.shared.delegate as? AppDelegate, appDelegate.window == nil {
             appDelegate.window = window
-            appDelegate.dimScreenOnIdle()
         }
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {
         // Called as the scene is being released by the system.
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        router?.handle(userActivity: userActivity)
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        URLContexts.forEach { router?.handle(url: $0.url) }
+    }
+
+    func stateRestorationActivity(for scene: UIScene) -> NSUserActivity? {
+        router?.currentRoute?.userActivity
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
