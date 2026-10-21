@@ -124,8 +124,8 @@ enum CapitalIQKeyCommand: Equatable, CaseIterable {
         switch key.lowercased() {
         case "1": self = .showWatchlists
         case "f": self = .focusSearch
-        case "up": self = .nextWatchlist
-        case "down": self = .previousWatchlist
+        case "up": self = .previousWatchlist
+        case "down": self = .nextWatchlist
         default: return nil
         }
     }
@@ -134,8 +134,8 @@ enum CapitalIQKeyCommand: Equatable, CaseIterable {
         switch self {
         case .showWatchlists: return "Watchlists"
         case .focusSearch: return "Search"
-        case .nextWatchlist: return "Previous Watchlist"
-        case .previousWatchlist: return "Next Watchlist"
+        case .nextWatchlist: return "Next Watchlist"
+        case .previousWatchlist: return "Previous Watchlist"
         }
     }
 }
@@ -247,10 +247,10 @@ final class AppRouter: ObservableObject {
             section = .search
             selectedTicker = nil
             searchFocusRequest += 1
-        case .nextWatchlist:
-            if let next = store.watchlist(before: selectedWatchlistID) { navigate(to: .watchlist(id: next.id)) }
         case .previousWatchlist:
-            if let previous = store.watchlist(after: selectedWatchlistID) { navigate(to: .watchlist(id: previous.id)) }
+            if let previous = store.watchlist(before: selectedWatchlistID) { navigate(to: .watchlist(id: previous.id)) }
+        case .nextWatchlist:
+            if let next = store.watchlist(after: selectedWatchlistID) { navigate(to: .watchlist(id: next.id)) }
         }
     }
 }

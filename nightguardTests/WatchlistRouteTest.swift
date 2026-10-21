@@ -73,8 +73,8 @@ class WatchlistRouteTest: XCTestCase {
     func testKeyCommandMapping() {
         XCTAssertEqual(CapitalIQKeyCommand(key: "1", command: true), .showWatchlists)
         XCTAssertEqual(CapitalIQKeyCommand(key: "f", command: true), .focusSearch)
-        XCTAssertEqual(CapitalIQKeyCommand(key: "up", command: true), .nextWatchlist)
-        XCTAssertEqual(CapitalIQKeyCommand(key: "down", command: true), .previousWatchlist)
+        XCTAssertEqual(CapitalIQKeyCommand(key: "up", command: true), .previousWatchlist)
+        XCTAssertEqual(CapitalIQKeyCommand(key: "down", command: true), .nextWatchlist)
         XCTAssertNil(CapitalIQKeyCommand(key: "1", command: false))
         XCTAssertNil(CapitalIQKeyCommand(key: "z", command: true))
     }
@@ -85,11 +85,11 @@ class WatchlistRouteTest: XCTestCase {
         router.handle(.showWatchlists)
         XCTAssertEqual(router.section, .watchlists)
         XCTAssertEqual(router.selectedWatchlistID, store.watchlists[0].id)
-        router.handle(.previousWatchlist)
+        router.handle(.nextWatchlist)
         XCTAssertEqual(router.selectedWatchlistID, store.watchlists[1].id)
-        router.handle(.nextWatchlist)
+        router.handle(.previousWatchlist)
         XCTAssertEqual(router.selectedWatchlistID, store.watchlists[0].id)
-        router.handle(.nextWatchlist)
+        router.handle(.previousWatchlist)
         XCTAssertEqual(router.selectedWatchlistID, store.watchlists.last?.id)
     }
 
