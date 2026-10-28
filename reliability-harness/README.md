@@ -9,7 +9,8 @@ polling, or alarm behavior.
 ## Fresh macOS setup
 
 Use macOS with Xcode 26.6, `xcodebuild`, the iOS 26.5 or 27.0 iPhone 17
-simulator runtime, and Python 3. The runner uses Node 20 and MongoDB Community.
+simulator runtime, and Python 3.9 or newer (system Python works). The runner
+uses Node 20 and MongoDB Community.
 For a Homebrew installation:
 
 ```sh
@@ -37,6 +38,14 @@ reliability-harness/scripts/setup-nightscout.sh
 
 The script installs `nightscout/cgm-remote-monitor` tag `v15.0.9` in
 `.state/`, verifies the exact tag commit, and runs `npm ci` with Node 20.
+The Homebrew tap/trust/install steps plus `setup-nightscout.sh` take about
+**2.5 minutes** on a fresh VM. Before running the harness, shut down the
+booted source simulators:
+
+```sh
+xcrun simctl shutdown all
+```
+
 The first `run.sh` invocation automatically performs `xcodebuild
 build-for-testing` when no matching cached build exists, reuses persistent
 iPhone 17 clones named `Nightguard Reliability slot <n>` (creating a slot only
@@ -44,13 +53,14 @@ when missing), starts services, and runs the UI test. Clones are cold-booted
 serially with load-average waits between boots, retained booted for the run,
 and reused across session waves. Per-session cleanup uninstalls the app and
 clears its app-group state without rebooting the clone; all clones are shut
-down at run end.
+down at run end. The runner also shuts down the source iPhone 17 before
+cloning. On a fresh VM, the first run reaches the first UI test in about
+**2 minutes**, plus about **6.5 minutes** for staggered boots at K=6. A full
+K=6 wave run takes about **25–27 minutes** end to end.
 Before launching each UI test, the runner waits for the 1-minute load average
 to drop below three times the logical CPU count, for up to 120 seconds. On the
-reference host, clean-checkout setup
-from clone through first UI-test launch took about **2.1 minutes**. The
-Homebrew MongoDB tap and the Node 20.20.2 and MongoDB Community 9.0.4 installs
-were already present on that host and were skipped during that measurement.
+Capacity was measured at **K=6** on 12-CPU/16-GB VMs: **6/6 healthy waves
+passed on each of two fresh VMs**. Do not run above K=6.
 
 Allow at least **20 GB free** on the volume containing
 `~/Library/Developer` before starting a run. A full run needs about **3 GB**
@@ -144,10 +154,15 @@ The runner builds the requested app ref in a detached Git worktree with
 `.xctestrun`. The app ref must already contain the registered
 `AlarmReliabilityUITests.swift` and the `--reliability-host-uri` AppDelegate
 hook; refs that do not are rejected rather than overlaid. Uncommitted local
-changes are still copied into the build worktree. The runner recommends no
-more workers than it has measured.
+changes are still copied into the build worktree. `capacity.json` leaves
+`recommendedWorkers` null because summed process RSS double-counts shared
+pages; use measured capacity evidence rather than that RSS total.
 `--keep-services-running` leaves the local services running after the run;
 simulator clones are shut down but retained for reuse.
+
+To stop a run, press Ctrl-C or send SIGTERM to its `run.py` PID. `run.sh`
+execs Python directly, so either signal reaches the runner and triggers cleanup
+of child process groups, services, and simulator clones. Avoid SIGKILL.
 
 Run output is written to `results/<label>-<timestamp>/`:
 
@@ -157,8 +172,9 @@ Run output is written to `results/<label>-<timestamp>/`:
   request path tokens are redacted.
 - `events/` contains host-wall-clock UI samples as JSONL.
 - `sessions/` contains per-session metadata and test logs.
-- `capacity.json` records the observed parallel worker count and sampled
-  simulator/test-process CPU and memory use, plus a target-N time estimate.
+- `capacity.json` records sampled CPU, process RSS, minimum free memory,
+  `vm.memory_pressure`, swap usage, load averages, and a target-N estimate
+  using the measured worker count. `recommendedWorkers` is null.
 - `run.json` records each clone's boot duration, status, and inter-boot load wait.
 
 Per-slot access tokens, per-session runner configuration, MongoDB state,

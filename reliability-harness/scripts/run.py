@@ -34,6 +34,9 @@ TEST_NAME = "nightguardUITests/AlarmReliabilityUITests/testAlarmSession"
 TOKEN_ASSIGNMENT = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
 XCODE_TEST_LAUNCH_LOCK = threading.Lock()
 MIN_DEVELOPER_FREE_SPACE_BYTES = 20 * 1024 ** 3
+CHILD_PROCESS_GROUPS = {}
+CHILD_PROCESS_GROUPS_LOCK = threading.RLock()
+RUN_INTERRUPTED = False
 
 
 def reserve_port():
@@ -97,20 +100,57 @@ def command_output(command, cwd=None, env=None, timeout=30):
     ).stdout
 
 
+def register_child_process_group(process):
+    with CHILD_PROCESS_GROUPS_LOCK:
+        CHILD_PROCESS_GROUPS[process.pid] = process
+
+
+def unregister_child_process_group(process):
+    with CHILD_PROCESS_GROUPS_LOCK:
+        CHILD_PROCESS_GROUPS.pop(process.pid, None)
+
+
+def signal_child_process_groups(signum):
+    with CHILD_PROCESS_GROUPS_LOCK:
+        process_ids = list(CHILD_PROCESS_GROUPS)
+    for process_id in process_ids:
+        try:
+            os.killpg(process_id, signum)
+        except ProcessLookupError:
+            pass
+
+
+def terminate_child_process_groups(timeout=8):
+    with CHILD_PROCESS_GROUPS_LOCK:
+        processes = list(CHILD_PROCESS_GROUPS.values())
+    for process in reversed(processes):
+        terminate_process(process, timeout=timeout)
+
+
 def run_logged(command, logfile, cwd=None, env=None, timeout=None):
     logfile = Path(logfile)
     logfile.parent.mkdir(parents=True, exist_ok=True)
     with logfile.open("w", encoding="utf-8") as output:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             [str(item) for item in command],
             cwd=cwd,
             env=env,
+            stdin=subprocess.DEVNULL,
             stdout=output,
             stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
+            start_new_session=True,
         )
-    return completed.returncode
+        register_child_process_group(process)
+        try:
+            return process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            terminate_process(process)
+            raise
+        except BaseException:
+            terminate_process(process)
+            raise
+        finally:
+            unregister_child_process_group(process)
 
 
 def load_average_1m():
@@ -162,13 +202,19 @@ def run_logged_with_load_gate(command, logfile, cwd, env, timeout, logical_cpus)
                 env=env,
                 stdout=output,
                 stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
+            register_child_process_group(process)
         try:
             return process.wait(timeout=timeout), gate
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+            terminate_process(process)
             raise
+        except BaseException:
+            terminate_process(process)
+            raise
+        finally:
+            unregister_child_process_group(process)
 
 
 def tail(path, lines=60):
@@ -290,6 +336,7 @@ def spawn_service(command, logfile, cwd=None, env=None, stdout=subprocess.DEVNUL
         start_new_session=True,
     )
     process._harness_log_handle = log_handle
+    register_child_process_group(process)
     return process
 
 
@@ -372,13 +419,22 @@ def terminate_stale_services():
 def terminate_process(process, timeout=8):
     if process is None:
         return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
     if process.poll() is None:
-        process.terminate()
         try:
             process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=timeout)
+            pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    if process.poll() is None:
+        process.wait(timeout=timeout)
+    unregister_child_process_group(process)
     handle = getattr(process, "_harness_log_handle", None)
     if handle and not handle.closed:
         handle.close()
@@ -544,6 +600,13 @@ def simulator_source():
     for runtime in preferred_runtimes:
         for device in devices["devices"].get(f"com.apple.CoreSimulator.SimRuntime.{runtime}", []):
             if device.get("isAvailable") and device.get("name") == "iPhone 17":
+                subprocess.run(
+                    ["xcrun", "simctl", "shutdown", device["udid"]],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=60,
+                )
                 return device["udid"], runtime
     raise RuntimeError("No available iPhone 17 simulator on iOS 26.5 or 27.0")
 
@@ -634,6 +697,40 @@ def create_simulators(count, run_dir):
         encoding="utf-8",
     )
     return source_id, simulators, runtime
+
+
+def handle_run_signal(signum, _frame):
+    global RUN_INTERRUPTED
+    RUN_INTERRUPTED = True
+    signal_child_process_groups(signal.SIGTERM)
+    time.sleep(0.5)
+    signal_child_process_groups(signal.SIGKILL)
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
+    raise SystemExit(128 + signum)
+
+
+def install_run_signal_handlers():
+    signal.signal(signal.SIGINT, handle_run_signal)
+    signal.signal(signal.SIGTERM, handle_run_signal)
+
+
+def cleanup_run(run_dir, simulators, processes, keep_services_running):
+    redact_result_artifacts(run_dir)
+    for simulator_id in simulators:
+        subprocess.run(
+            ["xcrun", "simctl", "shutdown", simulator_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=60,
+        )
+    if not keep_services_running or RUN_INTERRUPTED:
+        for process in reversed(processes):
+            terminate_process(process)
+        terminate_child_process_groups()
+    else:
+        print(f"Services left running for {run_dir}; simulators are shut down")
 
 
 def boot_simulators(simulators, run_dir, logical_cpus):
@@ -1007,6 +1104,7 @@ def start_gateway(slots, gateway_log):
         bufsize=1,
         start_new_session=True,
     )
+    register_child_process_group(server)
     ready_line = server.stdout.readline()
     if not ready_line:
         raise RuntimeError("Gateway exited before reporting readiness")
@@ -1038,6 +1136,8 @@ def wait_for_resources(futures, measurement):
     max_cpu = 0.0
     max_rss = 0
     samples = 0
+    host_samples = []
+    memory_bytes = int(command_output(["sysctl", "-n", "hw.memsize"]).strip())
     pending = set(futures)
     while pending:
         completed, pending = concurrent.futures.wait(
@@ -1074,11 +1174,76 @@ def wait_for_resources(futures, measurement):
             samples += 1
         except (OSError, ValueError, subprocess.SubprocessError):
             pass
+        host_samples.append(sample_host_resources(memory_bytes))
     measurement.update({
         "maxObservedTotalCpuPercent": round(max_cpu, 1),
         "maxObservedTotalProcessRssMiB": round(max_rss / 1024, 1),
         "resourceSamples": samples,
+        "hostResourceSamples": host_samples,
     })
+    free_percent = [
+        sample["freeMemoryPercent"] for sample in host_samples
+        if sample["freeMemoryPercent"] is not None
+    ]
+    pressure = [
+        sample["vmPressureLevel"] for sample in host_samples
+        if isinstance(sample["vmPressureLevel"], (int, float))
+    ]
+    measurement["minimumFreeMemoryPercent"] = min(free_percent) if free_percent else None
+    measurement["vmPressureLevel"] = max(pressure) if pressure else None
+    measurement["swapUsage"] = host_samples[-1]["swapUsage"] if host_samples else None
+    load_values = {
+        f"{window}m": [
+            sample[f"loadAverage{window}m"] for sample in host_samples
+            if sample[f"loadAverage{window}m"] is not None
+        ]
+        for window in (1, 5, 15)
+    }
+    measurement["loadAverage"] = {
+        key: {"minimum": min(values), "maximum": max(values)}
+        for key, values in load_values.items() if values
+    }
+
+
+def sample_host_resources(memory_bytes):
+    sample = {
+        "sampledAtMs": int(time.time() * 1000),
+        "freeMemoryPercent": None,
+        "vmPressureLevel": None,
+        "swapUsage": None,
+    }
+    try:
+        vm_stat = command_output(["vm_stat"], timeout=10)
+        page_size = re.search(r"page size of ([\d,]+) bytes", vm_stat)
+        free_pages = re.search(r"Pages free:\s*([\d,]+)", vm_stat)
+        if page_size and free_pages and memory_bytes:
+            page_bytes = int(page_size.group(1).replace(",", ""))
+            free_count = int(free_pages.group(1).replace(",", ""))
+            sample["freeMemoryPercent"] = round(
+                free_count * page_bytes * 100 / memory_bytes, 2
+            )
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    try:
+        value = command_output(["sysctl", "-n", "vm.memory_pressure"], timeout=5).strip()
+        sample["vmPressureLevel"] = int(value)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    try:
+        sample["swapUsage"] = command_output(
+            ["sysctl", "-n", "vm.swapusage"], timeout=5
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        loads = os.getloadavg()
+        sample.update({
+            f"loadAverage{window}m": round(value, 2)
+            for window, value in zip((1, 5, 15), loads)
+        })
+    except (AttributeError, OSError):
+        sample.update({f"loadAverage{window}m": None for window in (1, 5, 15)})
+    return sample
 
 
 def execute_session(
@@ -1201,6 +1366,7 @@ def execute_session(
             bufsize=1,
             start_new_session=True,
         )
+        register_child_process_group(feeder)
         result_bundle_dir = STATE / "xcresults" / run_dir.name
         result_bundle_dir.mkdir(parents=True, exist_ok=True)
         result_bundle = result_bundle_dir / f"{session_id}.xcresult"
@@ -1251,6 +1417,8 @@ def execute_session(
     finally:
         if "feeder" in locals() and feeder.poll() is None:
             terminate_process(feeder, timeout=5)
+        if "feeder" in locals():
+            unregister_child_process_group(feeder)
         if "feeder_log_handle" in locals() and not feeder_log_handle.closed:
             feeder_log_handle.close()
         metadata = {
@@ -1350,6 +1518,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    install_run_signal_handlers()
     require_tools()
     app_commit = command_output([
         "git", "-C", ROOT, "rev-parse", f"{args.app_ref}^{{commit}}"
@@ -1541,25 +1710,17 @@ def main():
         median_overhead_ms = sorted(overheads)[len(overheads) // 2] if overheads else 0
         memory_bytes = int(command_output(["sysctl", "-n", "hw.memsize"]).strip())
         memory_gib = memory_bytes / (1024 ** 3)
-        per_worker_rss = measurement["maxObservedTotalProcessRssMiB"] / workers
-        memory_based_workers = max(
-            1,
-            int(memory_gib * 1024 * 0.75 / max(per_worker_rss, 1)),
-        )
-        cpu_per_worker = measurement["maxObservedTotalCpuPercent"] / workers
-        cpu_based_workers = (
-            max(1, int(logical_cpus * 75 / cpu_per_worker))
-            if cpu_per_worker > 0
-            else workers
-        )
-        recommended_workers = min(workers, memory_based_workers, cpu_based_workers)
-        estimated_batches = math.ceil(args.estimate_sessions / recommended_workers)
+        estimated_batches = math.ceil(args.estimate_sessions / workers)
         measurement.update({
             "logicalCpus": logical_cpus,
             "physicalMemoryGiB": round(memory_gib, 1),
             "measuredMedianSessionOverheadMs": median_overhead_ms,
-            "recommendedWorkers": recommended_workers,
-            "recommendationIsCappedAtTestedWorkers": True,
+            "recommendedWorkers": None,
+            "recommendationNote": (
+                "Not calculated: summed process RSS double-counts shared pages; "
+                "use empirical capacity evidence."
+            ),
+            "estimateUsesMeasuredWorkers": workers,
             "estimateTargetSessions": args.estimate_sessions,
             "estimatedTargetMinutes": round(
                 estimated_batches * (
@@ -1592,25 +1753,15 @@ def main():
         print(f"Scorecard: {run_dir / 'scorecard.md'}")
         return 0
     finally:
-        redact_result_artifacts(run_dir)
-        for simulator_id in simulators:
-            subprocess.run(
-                ["xcrun", "simctl", "shutdown", simulator_id],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=60,
-            )
-        if not args.keep_services_running:
-            for process in reversed(processes):
-                terminate_process(process)
-        else:
-            print(f"Services left running for {run_dir}; simulators are shut down")
+        cleanup_run(run_dir, simulators, processes, args.keep_services_running)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
+    except KeyboardInterrupt:
+        print("Run interrupted; cleanup completed.", file=sys.stderr)
+        raise SystemExit(130)
     except Exception as error:
         print(f"ERROR: {error}", file=sys.stderr)
         raise SystemExit(1)
