@@ -86,13 +86,18 @@ final class NightscoutAPIClient {
     // and made otherwise healthy v3 servers look unavailable in background.
     private let v3ReadTimeout: TimeInterval = 20
     private let session: URLSession
+    private let legacyCooldown: TimeInterval
+    private let now: () -> Date
     private let lock = NSLock()
     private var supportByServer: [String: V3Support] = [:]
+    private var legacyUntilByServer: [String: Date] = [:]
     private var jwtByCredential: [String: String] = [:]
     private var pendingJWT: [String: [(Result<String, Error>) -> Void]] = [:]
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, legacyCooldown: TimeInterval = 180, now: @escaping () -> Date = Date.init) {
         self.session = session
+        self.legacyCooldown = legacyCooldown
+        self.now = now
     }
 
     @discardableResult
@@ -115,15 +120,34 @@ final class NightscoutAPIClient {
         }
 
         let effectiveReadTimeout = readTimeout ?? self.v3ReadTimeout
+        let key = baseURL.absoluteString
         logInfo(
             "V3 request started endpoint=\(safeEndpoint(path: path, query: query)) timeout=\(Int(effectiveReadTimeout))s fallbackOnTransportFailure=\(fallbackOnTransportFailure) allowLegacyFallback=\(allowLegacyFallback) tokenConfigured=\(!UserDefaultsRepository.nightscoutToken.isEmpty)"
         )
 
         let trackedTask = NightscoutRequestTask()
+        if method.uppercased() == "GET",
+           fallbackOnTransportFailure,
+           allowLegacyFallback,
+           legacy != nil,
+           isInLegacyCooldown(key) {
+            performLegacy(
+                legacy,
+                method: method,
+                body: body,
+                trackedTask: trackedTask,
+                compatibilityFallback: true,
+                useAccessTokenHeader: legacyUseAccessTokenHeader,
+                completion: completion
+            )
+            return trackedTask
+        }
+
         determineV3Support(
             baseURL: baseURL,
             trackedTask: trackedTask,
             allowTransportFallback: method.uppercased() == "GET" && fallbackOnTransportFailure,
+            canUseLegacy: allowLegacyFallback && legacy != nil,
             timeout: effectiveReadTimeout
         ) { result in
             switch result {
@@ -191,6 +215,7 @@ final class NightscoutAPIClient {
         baseURL: URL,
         trackedTask: NightscoutRequestTask,
         allowTransportFallback: Bool,
+        canUseLegacy: Bool,
         timeout: TimeInterval,
         completion: @escaping (Result<Bool, Error>) -> Void
     ) {
@@ -216,6 +241,9 @@ final class NightscoutAPIClient {
             if let error = error {
                 self.logError("V3 capability request failed durationMs=\(duration) \(self.errorSummary(error))")
                 if allowTransportFallback && self.isTransportFailure(error) {
+                    if canUseLegacy {
+                        self.enterLegacyCooldown(for: key, reason: self.errorSummary(error))
+                    }
                     self.logWarning("Nightscout v3 capability check failed (\(self.errorSummary(error))); trying v1 compatibility mode")
                     completion(.success(false))
                 } else {
@@ -237,6 +265,9 @@ final class NightscoutAPIClient {
                 self.setSupport(.supported, for: key)
                 self.logInfo("V3 capability response HTTP \(http.statusCode) durationMs=\(duration); V3 is supported")
                 completion(.success(true))
+            } else if allowTransportFallback && canUseLegacy && (500...599).contains(http.statusCode) {
+                self.enterLegacyCooldown(for: key, reason: "HTTP \(http.statusCode)")
+                completion(.success(false))
             } else {
                 self.logError("V3 capability response HTTP \(http.statusCode) durationMs=\(duration)")
                 completion(.failure(NightscoutHTTPError(statusCode: http.statusCode, endpoint: "/api/v3/version")))
@@ -265,7 +296,12 @@ final class NightscoutAPIClient {
         if accessToken.isEmpty {
             performV3Request(baseURL: baseURL, path: path, query: query, method: method, body: body, jwt: nil, trackedTask: trackedTask, readTimeout: readTimeout) { result in
                 if allowLegacyFallback && self.shouldFallbackToLegacy(result: result, method: method, legacy: legacy, allowUnauthorized: fallbackOnTransportFailure, allowTransportFailure: fallbackOnTransportFailure) {
-                    self.logWarning("Nightscout v3 read returned HTTP 401 without a JWT; using v1 compatibility mode")
+                    self.enterLegacyCooldownIfNeeded(
+                        for: baseURL.absoluteString,
+                        result: result,
+                        allowTransportFailure: fallbackOnTransportFailure
+                    )
+                    self.logWarning("Nightscout v3 GET failed (\(self.resultErrorSummary(result))); using v1 compatibility mode")
                     self.performLegacy(
                         legacy,
                         method: method,
@@ -295,6 +331,11 @@ final class NightscoutAPIClient {
                         self.invalidateJWT(baseURL: baseURL, accessToken: accessToken)
                         self.performAuthorizedV3(baseURL: baseURL, path: path, query: query, method: method, body: body, legacy: legacy, trackedTask: trackedTask, mayRefreshJWT: false, fallbackOnTransportFailure: fallbackOnTransportFailure, allowLegacyFallback: allowLegacyFallback, readTimeout: readTimeout, legacyUseAccessTokenHeader: legacyUseAccessTokenHeader, completion: completion)
                     } else if allowLegacyFallback && self.shouldFallbackToLegacy(result: result, method: method, legacy: legacy, allowUnauthorized: false, allowTransportFailure: fallbackOnTransportFailure) {
+                        self.enterLegacyCooldownIfNeeded(
+                            for: baseURL.absoluteString,
+                            result: result,
+                            allowTransportFailure: fallbackOnTransportFailure
+                        )
                         self.logWarning("Nightscout v3 GET failed (\(self.resultErrorSummary(result))); using v1 compatibility mode")
                         self.performLegacy(
                             legacy,
@@ -497,6 +538,44 @@ final class NightscoutAPIClient {
         lock.unlock()
     }
 
+    private func enterLegacyCooldown(for key: String, reason: String) {
+        lock.lock()
+        legacyUntilByServer[key] = now().addingTimeInterval(legacyCooldown)
+        lock.unlock()
+        logWarning("Nightscout v3 unavailable (\(reason)); using v1 for \(Int(legacyCooldown))s")
+    }
+
+    private func isInLegacyCooldown(_ key: String) -> Bool {
+        let currentTime = now()
+        lock.lock()
+        guard let legacyUntil = legacyUntilByServer[key] else {
+            lock.unlock()
+            return false
+        }
+        if currentTime < legacyUntil {
+            lock.unlock()
+            return true
+        }
+        legacyUntilByServer.removeValue(forKey: key)
+        lock.unlock()
+        logInfo("v1 cool-down expired; re-probing v3")
+        return false
+    }
+
+    private func enterLegacyCooldownIfNeeded(
+        for key: String,
+        result: Result<(Data, HTTPURLResponse), Error>,
+        allowTransportFailure: Bool
+    ) {
+        guard case .failure(let error) = result else { return }
+        if let httpError = error as? NightscoutHTTPError,
+           (500...599).contains(httpError.statusCode) {
+            enterLegacyCooldown(for: key, reason: "HTTP \(httpError.statusCode)")
+        } else if allowTransportFailure && isTransportFailure(error) {
+            enterLegacyCooldown(for: key, reason: errorSummary(error))
+        }
+    }
+
     private func logInfo(_ message: String) {
         AppLogger.singleton.info(message, category: .nightscout)
     }
@@ -562,6 +641,9 @@ final class NightscoutAPIClient {
         guard case .failure(let error) = result else { return false }
         if let httpError = error as? NightscoutHTTPError {
             if httpError.statusCode == 404 || httpError.statusCode == 405 {
+                return true
+            }
+            if allowTransportFailure && (500...599).contains(httpError.statusCode) {
                 return true
             }
             return allowUnauthorized && httpError.statusCode == 401
