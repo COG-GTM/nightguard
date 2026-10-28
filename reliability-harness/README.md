@@ -40,9 +40,9 @@ The first `run.sh` invocation automatically performs `xcodebuild
 build-for-testing`, creates/reset iPhone 17 simulator devices (cloning a source
 device when supported and falling back to a clean device when not), starts
 services, and runs the UI test. On the reference host, clean-checkout setup
-through the first measured session took **[fill in after clean-checkout
-measurement]**. Homebrew installs already present on that host were skipped
-during that measurement.
+from clone through first UI-test launch took about **2.1 minutes**. The
+Homebrew MongoDB tap and the Node 20.20.2 and MongoDB Community 9.0.4 installs
+were already present on that host and were skipped during that measurement.
 
 The runner starts one local MongoDB process and two real Nightscout replicas
 per simulator slot. Slot replicas share `ns_slot_<slot>`; different slots
