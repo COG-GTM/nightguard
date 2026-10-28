@@ -37,6 +37,8 @@ MIN_DEVELOPER_FREE_SPACE_BYTES = 20 * 1024 ** 3
 CHILD_PROCESS_GROUPS = {}
 CHILD_PROCESS_GROUPS_LOCK = threading.RLock()
 RUN_INTERRUPTED = False
+CLEANUP_STARTED = False
+INTERRUPT_SIGNALS = []
 
 
 def reserve_port():
@@ -123,8 +125,13 @@ def signal_child_process_groups(signum):
 def terminate_child_process_groups(timeout=8):
     with CHILD_PROCESS_GROUPS_LOCK:
         processes = list(CHILD_PROCESS_GROUPS.values())
+    errors = []
     for process in reversed(processes):
-        terminate_process(process, timeout=timeout)
+        try:
+            terminate_process(process, timeout=timeout)
+        except Exception as error:
+            errors.append(f"terminate process group {process.pid}: {error}")
+    return errors
 
 
 def run_logged(command, logfile, cwd=None, env=None, timeout=None):
@@ -702,6 +709,9 @@ def create_simulators(count, run_dir):
 def handle_run_signal(signum, _frame):
     global RUN_INTERRUPTED
     RUN_INTERRUPTED = True
+    INTERRUPT_SIGNALS.append(signum)
+    if CLEANUP_STARTED:
+        return
     signal_child_process_groups(signal.SIGTERM)
     time.sleep(0.5)
     signal_child_process_groups(signal.SIGKILL)
@@ -716,21 +726,43 @@ def install_run_signal_handlers():
 
 
 def cleanup_run(run_dir, simulators, processes, keep_services_running):
-    redact_result_artifacts(run_dir)
+    global CLEANUP_STARTED
+    CLEANUP_STARTED = True
+    errors = []
+    try:
+        redact_result_artifacts(run_dir)
+    except Exception as error:
+        errors.append(f"redact results: {error}")
     for simulator_id in simulators:
-        subprocess.run(
-            ["xcrun", "simctl", "shutdown", simulator_id],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-            timeout=60,
-        )
+        try:
+            result = subprocess.run(
+                ["xcrun", "simctl", "shutdown", simulator_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=60,
+            )
+            if result.returncode:
+                errors.append(f"shutdown simulator {simulator_id}: exit {result.returncode}")
+        except Exception as error:
+            errors.append(f"shutdown simulator {simulator_id}: {error}")
     if not keep_services_running or RUN_INTERRUPTED:
         for process in reversed(processes):
-            terminate_process(process)
-        terminate_child_process_groups()
+            try:
+                terminate_process(process)
+            except Exception as error:
+                errors.append(f"terminate process {process.pid}: {error}")
+        errors.extend(terminate_child_process_groups())
     else:
         print(f"Services left running for {run_dir}; simulators are shut down")
+    for error in errors:
+        print(f"Cleanup error: {error}", file=sys.stderr)
+
+
+def run_if_not_interrupted(task):
+    if RUN_INTERRUPTED:
+        return None
+    return task()
 
 
 def boot_simulators(simulators, run_dir, logical_cpus):
@@ -1677,27 +1709,39 @@ def main():
         slot_locks = {slot: threading.Lock() for slot in range(1, workers + 1)}
 
         def run_slot_session(session):
+            if RUN_INTERRUPTED:
+                return None
             index, slot_number, simulator_id, session_profile = session
             with slot_locks[slot_number]:
-                return execute_session(
-                    index,
-                    slot_number,
-                    simulator_id,
-                    session_profile,
-                    run_seed,
-                    args,
-                    shape,
-                    slots,
-                    tokens,
-                    gateway_port,
-                    run_dir,
-                    xctestrun,
-                    logical_cpus,
+                return run_if_not_interrupted(
+                    lambda: execute_session(
+                        index,
+                        slot_number,
+                        simulator_id,
+                        session_profile,
+                        run_seed,
+                        args,
+                        shape,
+                        slots,
+                        tokens,
+                        gateway_port,
+                        run_dir,
+                        xctestrun,
+                        logical_cpus,
+                    )
                 )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        try:
             futures = [executor.submit(run_slot_session, session) for session in session_args]
             wait_for_resources(futures, measurement)
+        except (KeyboardInterrupt, SystemExit):
+            global RUN_INTERRUPTED
+            RUN_INTERRUPTED = True
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
         session_metadata = [
             json.loads(path.read_text(encoding="utf-8"))
             for path in (run_dir / "sessions").glob("*.json")
