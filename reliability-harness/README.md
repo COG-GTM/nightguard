@@ -180,7 +180,7 @@ node reliability-harness/gateway/self-test.js \
 
 This issues 200 requests per run against the real replicas, checks each
 ordered fault and deterministic decisions, and shortens only hold/delay
-durations for the self-test.
+durations while disabling timed episodes for the per-request self-test.
 
 The scorer uses Python 3's standard library and the frozen metric: the low
 reading must appear in the UI and a `Low BG` reason must appear no later than
