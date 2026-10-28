@@ -33,6 +33,7 @@ APP_BUNDLE_ID = "de.my-wan.dhe.nightguard"
 TEST_NAME = "nightguardUITests/AlarmReliabilityUITests/testAlarmSession"
 TOKEN_ASSIGNMENT = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
 XCODE_TEST_LAUNCH_LOCK = threading.Lock()
+LAST_XCODE_TEST_LAUNCH = None
 MIN_DEVELOPER_FREE_SPACE_BYTES = 20 * 1024 ** 3
 CHILD_PROCESS_GROUPS = {}
 CHILD_PROCESS_GROUPS_LOCK = threading.RLock()
@@ -188,40 +189,52 @@ def wait_for_load_below(threshold, timeout_seconds):
         time.sleep(min(5, remaining))
 
 
-def run_logged_with_load_gate(command, logfile, cwd, env, timeout, logical_cpus):
+def wait_for_xcode_launch(logical_cpus, timeout_seconds=120, minimum_spacing_seconds=20):
+    gate = wait_for_load_below(3 * logical_cpus, timeout_seconds)
+    spacing_started = time.monotonic()
+    while LAST_XCODE_TEST_LAUNCH is not None:
+        remaining = minimum_spacing_seconds - (
+            time.monotonic() - LAST_XCODE_TEST_LAUNCH
+        )
+        if remaining <= 0:
+            break
+        time.sleep(remaining)
+    gate["spacingWaitMs"] = int((time.monotonic() - spacing_started) * 1000)
+    return gate
+
+
+def start_logged_process(command, logfile, cwd, env):
     logfile = Path(logfile)
     logfile.parent.mkdir(parents=True, exist_ok=True)
-    with logfile.open("w", encoding="utf-8") as output:
-        with XCODE_TEST_LAUNCH_LOCK:
-            gate = wait_for_load_below(3 * logical_cpus, 120)
-            if gate["timedOut"]:
-                raise RuntimeError(
-                    "1-minute load average remained above "
-                    f"{3 * logical_cpus} for 120 seconds"
-                )
-            output.write(
-                f"Load gate passed after {gate['waitMs']} ms "
-                f"at 1-minute load {gate['loadAverage1m']}\n"
-            )
-            process = subprocess.Popen(
-                [str(item) for item in command],
-                cwd=cwd,
-                env=env,
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            register_child_process_group(process)
-        try:
-            return process.wait(timeout=timeout), gate
-        except subprocess.TimeoutExpired:
-            terminate_process(process)
-            raise
-        except BaseException:
-            terminate_process(process)
-            raise
-        finally:
-            unregister_child_process_group(process)
+    output = logfile.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [str(item) for item in command],
+            cwd=cwd,
+            env=env,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except BaseException:
+        output.close()
+        raise
+    register_child_process_group(process)
+    return process, output
+
+
+def wait_for_logged_process(process, output, timeout):
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        terminate_process(process)
+        raise
+    except BaseException:
+        terminate_process(process)
+        raise
+    finally:
+        unregister_child_process_group(process)
+        output.close()
 
 
 def tail(path, lines=60):
@@ -1293,6 +1306,7 @@ def execute_session(
     xctestrun,
     logical_cpus,
 ):
+    global LAST_XCODE_TEST_LAUNCH
     session_id = f"{args.label}-{index:03d}"
     session_dir = run_dir / "sessions" / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -1306,11 +1320,15 @@ def execute_session(
     seed_result = {}
     registration = {}
     launch_load_gate = {}
+    launch_lock_acquired = False
     seed_env = node_environment({
         "HARNESS_NIGHTSCOUT_TOKEN": tokens[str(slot_number)]["accessToken"],
     })
 
     try:
+        XCODE_TEST_LAUNCH_LOCK.acquire()
+        launch_lock_acquired = True
+        launch_load_gate = wait_for_xcode_launch(logical_cpus)
         reset_simulator(simulator_id, session_dir / "simulator.log")
         seed_result = run_node_json(
             [
@@ -1405,7 +1423,7 @@ def execute_session(
         test_env = node_environment()
         test_env.pop("TEST_RUNNER_SESSION_CONFIG", None)
         test_env.pop("TEST_RUNNER_SESSION_CONFIG_JSON", None)
-        test_exit_code, launch_load_gate = run_logged_with_load_gate(
+        test_process, test_log_handle = start_logged_process(
             [
                 "xcodebuild",
                 "test-without-building",
@@ -1422,8 +1440,14 @@ def execute_session(
             session_log,
             ROOT,
             test_env,
+        )
+        LAST_XCODE_TEST_LAUNCH = time.monotonic()
+        XCODE_TEST_LAUNCH_LOCK.release()
+        launch_lock_acquired = False
+        test_exit_code = wait_for_logged_process(
+            test_process,
+            test_log_handle,
             int(shape["duration_seconds"]) + 900,
-            logical_cpus,
         )
         if test_exit_code:
             harness_error = f"xcodebuild exited {test_exit_code}"
@@ -1447,6 +1471,12 @@ def execute_session(
         if test_exit_code is None:
             test_exit_code = 1
     finally:
+        if launch_lock_acquired:
+            XCODE_TEST_LAUNCH_LOCK.release()
+        if "test_process" in locals() and test_process.poll() is None:
+            terminate_process(test_process, timeout=5)
+        if "test_log_handle" in locals() and not test_log_handle.closed:
+            test_log_handle.close()
         if "feeder" in locals() and feeder.poll() is None:
             terminate_process(feeder, timeout=5)
         if "feeder" in locals():
