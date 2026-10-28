@@ -34,6 +34,12 @@ private final class NightscoutMockURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class StubNightscoutTask: NightscoutTask {
+    private(set) var cancelled = false
+    var nightscoutIsRunning: Bool { !cancelled }
+    func cancel() { cancelled = true }
+}
+
 class NightscoutServiceTest: XCTestCase {
 
     func testHybridEntriesWaitsForFreshFallbackWhenV3HeadIsStale() {
@@ -505,6 +511,163 @@ class NightscoutServiceTest: XCTestCase {
         XCTAssertEqual(requestedPaths.filter { $0 == "/api/v2/authorization/request/token=care-secret" }.count, 2)
         XCTAssertEqual(requestedPaths.filter { $0 == "/api/v3/entries" }.count, 2)
         XCTAssertFalse(requestedPaths.contains("/api/v1/entries.json"))
+    }
+
+    func testCapabilityAndReadRequestsUseShortTimeouts() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://short-timeouts.example.org", token: "")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        var timeoutsByPath: [String: TimeInterval] = [:]
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            timeoutsByPath[url.path] = request.timeoutInterval
+            let data = url.path.hasSuffix("/api/v3/entries") ? Data("{\"result\":[]}".utf8) : Data("{}".utf8)
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), data)
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        let expectation = expectation(description: "v3 read completed")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"])
+        ) { _ in expectation.fulfill() }
+        waitForExpectations(timeout: 2)
+
+        XCTAssertEqual(timeoutsByPath["/api/v3/version"], NightscoutRequestTimeouts.standard.handshake)
+        XCTAssertEqual(timeoutsByPath["/api/v3/entries"], NightscoutRequestTimeouts.standard.read)
+        XCTAssertLessThan(NightscoutRequestTimeouts.standard.handshake, 20)
+        XCTAssertLessThan(NightscoutRequestTimeouts.standard.read, 20)
+    }
+
+    func testV1CompatibilityReadUsesReadTimeout() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://v1-timeout.example.org", token: "")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let timeouts = NightscoutRequestTimeouts(handshake: 2, read: 3, write: 20)
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration), timeouts: timeouts)
+        var timeoutsByPath: [String: TimeInterval] = [:]
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            timeoutsByPath[url.path] = request.timeoutInterval
+            let status = url.path.hasSuffix("/api/v3/version") ? 404 : 200
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)), Data("[]".utf8))
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        let expectation = expectation(description: "v1 read completed")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"])
+        ) { _ in expectation.fulfill() }
+        waitForExpectations(timeout: 2)
+
+        XCTAssertEqual(timeoutsByPath["/api/v3/version"], 2)
+        XCTAssertEqual(timeoutsByPath["/api/v1/entries.json"], 3)
+    }
+
+    func testEntriesStreamCoalescesRefreshWhileSyncIsYoung() {
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        var fetches: [StubNightscoutTask] = []
+        let stream = NightscoutEntriesStream(stalledSyncTimeout: 20, now: { clock }) { _ in
+            let task = StubNightscoutTask()
+            fetches.append(task)
+            return task
+        }
+
+        stream.refresh(force: true) { _ in }
+        clock.addTimeInterval(10)
+        stream.refresh(force: true) { _ in }
+
+        XCTAssertEqual(fetches.count, 1)
+        XCTAssertFalse(fetches[0].cancelled)
+    }
+
+    func testEntriesStreamCancelsHungRefreshAndServesWaitingCallers() {
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        var fetches: [StubNightscoutTask] = []
+        var handlers: [(NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void] = []
+        let stream = NightscoutEntriesStream(stalledSyncTimeout: 20, now: { clock }) { handler in
+            let task = StubNightscoutTask()
+            fetches.append(task)
+            handlers.append(handler)
+            return task
+        }
+        let fresh = NightscoutEntryRecord(dateMillis: clock.timeIntervalSince1970 * 1000, type: "sgv", sgv: 64)
+        let bothCallers = expectation(description: "both callers served by the replacement refresh")
+        bothCallers.expectedFulfillmentCount = 2
+        var delivered: [Double?] = []
+
+        stream.refresh(force: true) { result in
+            if case .data(let records) = result { delivered.append(records.last?.sgv) }
+            bothCallers.fulfill()
+        }
+        clock.addTimeInterval(30)
+        stream.refresh(force: true) { result in
+            if case .data(let records) = result { delivered.append(records.last?.sgv) }
+            bothCallers.fulfill()
+        }
+
+        XCTAssertEqual(fetches.count, 2)
+        XCTAssertTrue(fetches[0].cancelled)
+        XCTAssertFalse(fetches[1].cancelled)
+
+        handlers[1](.data([fresh]))
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(delivered, [64, 64])
+
+        // The hung request finishing late must not deliver a second result.
+        let noLateDelivery = expectation(description: "late result ignored")
+        noLateDelivery.isInverted = true
+        stream.refresh(force: false) { _ in }
+        handlers[0](.error(URLError(.cancelled)))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            if delivered.count > 2 { noLateDelivery.fulfill() }
+        }
+        waitForExpectations(timeout: 0.5)
+    }
+
+    func testEntriesStreamReplacesHungRefreshEvenWhenCacheIsFresh() {
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        var fetches: [StubNightscoutTask] = []
+        var handlers: [(NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void] = []
+        let stream = NightscoutEntriesStream(stalledSyncTimeout: 20, now: { clock }) { handler in
+            let task = StubNightscoutTask()
+            fetches.append(task)
+            handlers.append(handler)
+            return task
+        }
+        let initialSync = expectation(description: "initial sync")
+        stream.refresh(force: true) { _ in initialSync.fulfill() }
+        handlers[0](.data([NightscoutEntryRecord(dateMillis: clock.timeIntervalSince1970 * 1000, type: "sgv", sgv: 90)]))
+        wait(for: [initialSync], timeout: 2)
+
+        clock.addTimeInterval(60)
+        let forcedCaller = expectation(description: "forced caller served by the replacement")
+        var forcedValue: Double?
+        stream.refresh(force: true) { result in
+            if case .data(let records) = result { forcedValue = records.last?.sgv }
+            forcedCaller.fulfill()
+        }
+        clock.addTimeInterval(30)
+        let cachedCaller = expectation(description: "regular poll gets the cache")
+        stream.refresh(force: false) { _ in cachedCaller.fulfill() }
+        wait(for: [cachedCaller], timeout: 2)
+
+        XCTAssertEqual(fetches.count, 3)
+        XCTAssertTrue(fetches[1].cancelled)
+        handlers[2](.data([NightscoutEntryRecord(dateMillis: clock.timeIntervalSince1970 * 1000, type: "sgv", sgv: 64)]))
+        wait(for: [forcedCaller], timeout: 2)
+        XCTAssertEqual(forcedValue, 64)
+    }
+
+    func testStalledRefreshThresholdCoversWholeRequestChain() {
+        let timeouts = NightscoutRequestTimeouts(handshake: 5, read: 8, write: 20)
+        XCTAssertEqual(timeouts.entriesRefresh, 39)
     }
 
     private func useTemporaryCredentials(url: String, token: String) -> () -> Void {
