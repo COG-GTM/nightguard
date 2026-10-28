@@ -254,8 +254,15 @@ class MainViewModel: ObservableObject, Identifiable {
 
         doPeriodicUpdate(forceRepaint: forceRepaint, forceDataRefresh: forceDataRefresh)
 
-        timer = Timer.scheduledTimer(withTimeInterval: timeInterval, repeats: true) { [weak self] _ in
-            self?.doPeriodicUpdate(forceRepaint: false, forceDataRefresh: false)
+        scheduleNextPeriodicUpdate()
+    }
+
+    private func scheduleNextPeriodicUpdate() {
+        let delay = NightscoutEntriesStream.shared.nextPollingDelay(maximum: timeInterval)
+        timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.doPeriodicUpdate(forceRepaint: false, forceDataRefresh: false)
+            self.scheduleNextPeriodicUpdate()
         }
     }
 

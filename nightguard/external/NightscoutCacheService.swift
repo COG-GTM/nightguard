@@ -408,6 +408,25 @@ extension NightscoutCacheService {
     }
 }
 
+struct NightscoutEntryPollingSchedule {
+    private let readingInterval: TimeInterval = 5 * 60
+    private let retryInterval: TimeInterval = 30
+    private(set) var nextRefreshAt: Date?
+
+    func isRefreshDue(at now: Date) -> Bool {
+        nextRefreshAt.map { now >= $0 } ?? true
+    }
+
+    mutating func completed(latestReadingAt: Date?, at now: Date) {
+        guard let latestReadingAt, latestReadingAt <= now,
+              latestReadingAt.addingTimeInterval(readingInterval) > now else {
+            nextRefreshAt = now.addingTimeInterval(retryInterval)
+            return
+        }
+        nextRefreshAt = latestReadingAt.addingTimeInterval(readingInterval)
+    }
+}
+
 /// One cache-coalesced stream for all glucose entries used by the app.
 ///
 /// Nightscout's v3 generic collection applies its configured server-side
@@ -418,19 +437,26 @@ final class NightscoutEntriesStream {
 
     private let queue = DispatchQueue(label: "de.my-wan.dhe.nightscoutEntriesStreamSerialQueue")
     private let retention: TimeInterval = 48 * 60 * 60
-    private let refreshInterval: TimeInterval = 5 * 60
     private var records: [NightscoutEntryRecord] = []
     private var loaded = false
     private var syncInFlight = false
     private var activeNetworkTask: NightscoutTask?
     private var generation = 0
-    private var lastSyncAt: Date?
+    private var pollingSchedule = NightscoutEntryPollingSchedule()
     private var pending: [(NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void] = []
 
     func snapshot() -> [NightscoutEntryRecord] {
         queue.sync {
             loadIfNeededLocked()
             return records
+        }
+    }
+
+    func nextPollingDelay(maximum: TimeInterval) -> TimeInterval {
+        queue.sync {
+            guard let nextRefreshAt = pollingSchedule.nextRefreshAt else { return maximum }
+            let delay = nextRefreshAt.timeIntervalSinceNow
+            return delay > 0 ? min(maximum, delay) : maximum
         }
     }
 
@@ -448,8 +474,7 @@ final class NightscoutEntriesStream {
             loadIfNeededLocked()
             if !force,
                !records.isEmpty,
-               let lastSyncAt,
-               Date().timeIntervalSince(lastSyncAt) < refreshInterval {
+               !pollingSchedule.isRefreshDue(at: Date()) {
                 immediateResult = .data(records)
             } else {
                 pending.append { result in
@@ -508,7 +533,7 @@ final class NightscoutEntriesStream {
             let tomorrowMillis = startOfTomorrow * 1000
             records.removeAll { $0.dateMillis >= startOfToday && $0.dateMillis < tomorrowMillis }
             NightscoutDataRepository.singleton.storeNightscoutEntries(records)
-            lastSyncAt = nil
+            pollingSchedule = NightscoutEntryPollingSchedule()
         }
         AppLogger.singleton.info("NightscoutEntriesStream: removed current-day entries; next refresh is forced", category: .nightscout)
     }
@@ -520,7 +545,7 @@ final class NightscoutEntriesStream {
             activeNetworkTask = nil
             records = []
             loaded = true
-            lastSyncAt = nil
+            pollingSchedule = NightscoutEntryPollingSchedule()
             syncInFlight = false
             pending.removeAll()
         }
@@ -589,7 +614,12 @@ final class NightscoutEntriesStream {
                 let before = records.count
                 records = deduplicated(records + incoming)
                 records = prune(records)
-                lastSyncAt = Date()
+                let now = Date()
+                let latestReadingAt = records
+                    .filter { $0.type == "sgv" && $0.bloodSugar != nil && $0.dateMillis <= now.timeIntervalSince1970 * 1000 }
+                    .map(\.dateMillis).max()
+                    .map { Date(timeIntervalSince1970: $0 / 1000) }
+                pollingSchedule.completed(latestReadingAt: latestReadingAt, at: now)
                 NightscoutDataRepository.singleton.storeNightscoutEntries(records)
                 let addedOrUpdated = max(0, records.count - before)
                 let oldest = records.map(\.dateMillis).min().map { Date(timeIntervalSince1970: $0 / 1000).description } ?? "-"
@@ -600,6 +630,7 @@ final class NightscoutEntriesStream {
                 )
                 deliveredResult = .data(records)
             } else if case .error(let error) = result {
+                pollingSchedule.completed(latestReadingAt: nil, at: Date())
                 AppLogger.singleton.error(
                     "NightscoutEntriesStream: refresh failed; retaining \(records.count) cached entry/entries: \(error.localizedDescription)",
                     category: .nightscout
