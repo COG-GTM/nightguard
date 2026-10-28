@@ -94,7 +94,7 @@ class NightscoutCacheService: NSObject {
     /// Timestamp (ms) of the newest reading known to the app, from any source.
     func newestKnownReadingMillis() -> Double {
         let cached = serialQueue.sync { () -> Double in
-            max(currentNightscoutData.time.doubleValue, todaysBgData.last?.timestamp ?? 0)
+            max(currentNightscoutData.time.doubleValue, todaysBgData.last(where: { !$0.isMeteredBloodGlucoseValue })?.timestamp ?? 0)
         }
         return max(cached, NightscoutEntriesStream.shared.newestGlucoseMillis())
     }

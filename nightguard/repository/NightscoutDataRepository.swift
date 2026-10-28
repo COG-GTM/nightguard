@@ -86,7 +86,7 @@ struct NightscoutEntryRecord: Codable, Hashable {
     /// Nightscout can return the same CGM reading under several ids (uploader retries,
     /// v1/v3 responses), so two records with the same type and timestamp are one reading.
     var readingKey: String {
-        "\(type):\(Int64(dateMillis.rounded()))"
+        "\(type):\(dateMillis.rounded())"
     }
 
     static func deduplicatedByReading(_ values: [NightscoutEntryRecord]) -> [NightscoutEntryRecord] {
