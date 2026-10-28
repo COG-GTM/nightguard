@@ -631,6 +631,45 @@ class NightscoutServiceTest: XCTestCase {
         waitForExpectations(timeout: 0.5)
     }
 
+    func testEntriesStreamReplacesHungRefreshEvenWhenCacheIsFresh() {
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        var fetches: [StubNightscoutTask] = []
+        var handlers: [(NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void] = []
+        let stream = NightscoutEntriesStream(stalledSyncTimeout: 20, now: { clock }) { handler in
+            let task = StubNightscoutTask()
+            fetches.append(task)
+            handlers.append(handler)
+            return task
+        }
+        let initialSync = expectation(description: "initial sync")
+        stream.refresh(force: true) { _ in initialSync.fulfill() }
+        handlers[0](.data([NightscoutEntryRecord(dateMillis: clock.timeIntervalSince1970 * 1000, type: "sgv", sgv: 90)]))
+        wait(for: [initialSync], timeout: 2)
+
+        clock.addTimeInterval(60)
+        let forcedCaller = expectation(description: "forced caller served by the replacement")
+        var forcedValue: Double?
+        stream.refresh(force: true) { result in
+            if case .data(let records) = result { forcedValue = records.last?.sgv }
+            forcedCaller.fulfill()
+        }
+        clock.addTimeInterval(30)
+        let cachedCaller = expectation(description: "regular poll gets the cache")
+        stream.refresh(force: false) { _ in cachedCaller.fulfill() }
+        wait(for: [cachedCaller], timeout: 2)
+
+        XCTAssertEqual(fetches.count, 3)
+        XCTAssertTrue(fetches[1].cancelled)
+        handlers[2](.data([NightscoutEntryRecord(dateMillis: clock.timeIntervalSince1970 * 1000, type: "sgv", sgv: 64)]))
+        wait(for: [forcedCaller], timeout: 2)
+        XCTAssertEqual(forcedValue, 64)
+    }
+
+    func testStalledRefreshThresholdCoversWholeRequestChain() {
+        let timeouts = NightscoutRequestTimeouts(handshake: 5, read: 8, write: 20)
+        XCTAssertEqual(timeouts.entriesRefresh, 26)
+    }
+
     private func useTemporaryCredentials(url: String, token: String) -> () -> Void {
         let originalURL = UserDefaultsRepository.baseUri.value
         let temporaryURL = URL(string: url)!

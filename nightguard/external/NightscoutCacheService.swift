@@ -434,7 +434,7 @@ final class NightscoutEntriesStream {
     private let now: () -> Date
 
     init(
-        stalledSyncTimeout: TimeInterval = 20,
+        stalledSyncTimeout: TimeInterval = NightscoutRequestTimeouts.standard.entriesRefresh,
         now: @escaping () -> Date = Date.init,
         fetchHead: @escaping (@escaping (NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void) -> NightscoutTask? = {
             NightscoutService.singleton.readEntriesHead(resultHandler: $0)
@@ -466,6 +466,18 @@ final class NightscoutEntriesStream {
         queue.sync {
             loadIfNeededLocked()
             let currentTime = now()
+            if syncInFlight,
+               let syncStartedAt,
+               currentTime.timeIntervalSince(syncStartedAt) >= stalledSyncTimeout {
+                // Drop the hung sync even when the cache is still fresh, so its
+                // waiting callers are served; its late result is ignored by the
+                // generation check.
+                generation += 1
+                stalledTask = activeNetworkTask
+                activeNetworkTask = nil
+                syncInFlight = false
+                shouldStart = true
+            }
             if !force,
                !records.isEmpty,
                let lastSyncAt,
@@ -476,22 +488,12 @@ final class NightscoutEntriesStream {
                     callerTask.finish()
                     dispatchOnMain { completion(result) }
                 }
-                if syncInFlight,
-                   let syncStartedAt,
-                   currentTime.timeIntervalSince(syncStartedAt) >= stalledSyncTimeout {
-                    // Drop the hung sync; its late result is ignored by the
-                    // generation check and its callers are served by the new one.
-                    generation += 1
-                    stalledTask = activeNetworkTask
-                    activeNetworkTask = nil
-                    syncInFlight = false
-                }
-                if !syncInFlight {
-                    syncInFlight = true
-                    syncStartedAt = currentTime
-                    shouldStart = true
-                    requestGeneration = generation
-                }
+                if !syncInFlight { shouldStart = true }
+            }
+            if shouldStart {
+                syncInFlight = true
+                syncStartedAt = currentTime
+                requestGeneration = generation
             }
         }
 
@@ -503,12 +505,6 @@ final class NightscoutEntriesStream {
             stalledTask.cancel()
         }
 
-        if let immediateResult {
-            callerTask.finish()
-            dispatchOnMain { completion(immediateResult) }
-            return callerTask
-        }
-
         if shouldStart {
             let refreshGeneration = requestGeneration
             let networkTask = fetchHead { [weak self] result in
@@ -518,10 +514,15 @@ final class NightscoutEntriesStream {
                 queue.sync {
                     if refreshGeneration == generation { activeNetworkTask = networkTask }
                 }
-                callerTask.add(networkTask)
+                if immediateResult == nil { callerTask.add(networkTask) }
             } else {
                 finishRefresh(.error(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadURL)), generation: refreshGeneration)
             }
+        }
+
+        if let immediateResult {
+            callerTask.finish()
+            dispatchOnMain { completion(immediateResult) }
         }
 
         return callerTask
