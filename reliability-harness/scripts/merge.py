@@ -32,6 +32,7 @@ def main():
     parser = argparse.ArgumentParser(description="Merge compatible reliability-harness shard results.")
     parser.add_argument("results_dirs", nargs="+", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--allow-partial", action="store_true")
     args = parser.parse_args()
 
     inputs = []
@@ -60,6 +61,13 @@ def main():
 
     source = metadata[0]
     merged_rows = [sessions[index] for index in sorted(sessions)]
+    missing_indexes = [
+        index
+        for index in range(source["requestedSessions"])
+        if index not in sessions
+    ]
+    if missing_indexes and not args.allow_partial:
+        raise ValueError(f"Missing session indices: {missing_indexes}")
     result = score.aggregate_rows(merged_rows)
     result["run"] = {
         "appRef": source["appRef"],
@@ -71,6 +79,8 @@ def main():
         "runSeed": source["runSeed"],
         "requestedSessions": source["requestedSessions"],
         "mergedSessionIndexes": sorted(sessions),
+        "missingSessionIndexes": missing_indexes,
+        "partial": bool(missing_indexes),
         "inputs": inputs,
     }
     now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -84,6 +94,15 @@ def main():
         raise ValueError("Merge output must not overwrite an input results directory")
     output.mkdir(parents=True, exist_ok=False)
     score.write_result_files(output, result)
+    if missing_indexes:
+        scorecard = output / "scorecard.md"
+        contents = scorecard.read_text(encoding="utf-8")
+        contents = contents.replace(
+            "# Nightguard alarm reliability scorecard",
+            f"# PARTIAL ({len(merged_rows)}/{source['requestedSessions']})",
+            1,
+        )
+        scorecard.write_text(contents, encoding="utf-8")
     (output / "run.json").write_text(
         json.dumps(result["run"], indent=2) + "\n",
         encoding="utf-8",

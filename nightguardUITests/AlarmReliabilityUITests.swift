@@ -19,7 +19,6 @@ final class AlarmReliabilityUITests: XCTestCase {
         let environment = ProcessInfo.processInfo.environment
         let configData = environment["TEST_RUNNER_SESSION_CONFIG"]
             .flatMap { FileManager.default.contents(atPath: $0) }
-            ?? environment["TEST_RUNNER_SESSION_CONFIG_JSON"]?.data(using: .utf8)
         guard let data = configData else {
             XCTFail("TEST_RUNNER_SESSION_CONFIG must name a readable session file")
             return

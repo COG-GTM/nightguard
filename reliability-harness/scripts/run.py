@@ -31,6 +31,7 @@ NODE = NODE20_BIN / "node"
 MONGOD = Path(os.environ.get("MONGOD_BIN", "/opt/homebrew/opt/mongodb-community/bin/mongod"))
 APP_BUNDLE_ID = "de.my-wan.dhe.nightguard"
 TEST_NAME = "nightguardUITests/AlarmReliabilityUITests/testAlarmSession"
+TOKEN_ASSIGNMENT = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
 
 
 def reserve_port():
@@ -100,6 +101,19 @@ def tail(path, lines=60):
         return "\n".join(Path(path).read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
     except OSError:
         return ""
+
+
+def redact_result_artifacts(run_dir):
+    for artifact in Path(run_dir).rglob("*"):
+        if not artifact.is_file():
+            continue
+        try:
+            contents = artifact.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        redacted = TOKEN_ASSIGNMENT.sub(r"\1[REDACTED]", contents)
+        if redacted != contents:
+            artifact.write_text(redacted, encoding="utf-8")
 
 
 def require_tools():
@@ -501,6 +515,24 @@ def create_simulators(count, run_id, run_dir):
 
 def prepare_build_worktree(app_ref, worktree, source_root):
     command_output(["git", "worktree", "add", "--detach", worktree, app_ref], cwd=source_root, timeout=120)
+    test_source = worktree / "nightguardUITests" / "AlarmReliabilityUITests.swift"
+    project_file = worktree / "nightguard.xcodeproj" / "project.pbxproj"
+    app_delegate = worktree / "nightguard" / "AppDelegate.swift"
+    project = project_file.read_text(encoding="utf-8") if project_file.is_file() else ""
+    delegate = app_delegate.read_text(encoding="utf-8") if app_delegate.is_file() else ""
+    registered_test = (
+        "AlarmReliabilityUITests.swift" in project
+        and "AlarmReliabilityUITests.swift in Sources" in project
+    )
+    if (
+        not test_source.is_file()
+        or not registered_test
+        or "--reliability-host-uri" not in delegate
+    ):
+        raise RuntimeError(
+            f"app ref {app_ref} doesn't include the harness; merge "
+            "origin/devin/za-135-alarm-reliability-harness into it first"
+        )
     tracked_diff = subprocess.run(
         ["git", "diff", "--binary", "HEAD"],
         cwd=source_root,
@@ -516,10 +548,6 @@ def prepare_build_worktree(app_ref, worktree, source_root):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    added_test = source_root / "nightguardUITests" / "AlarmReliabilityUITests.swift"
-    target_test = worktree / "nightguardUITests" / "AlarmReliabilityUITests.swift"
-    if added_test.exists():
-        shutil.copy2(added_test, target_test)
     project_file = worktree / "nightguard.xcodeproj" / "project.pbxproj"
     project = project_file.read_text(encoding="utf-8")
     for reference in (
@@ -566,7 +594,6 @@ def build_for_testing(worktree, source_id, derived_data, log_path):
 def configure_test_run(source_xctestrun, session_config, xctestrun_path):
     with source_xctestrun.open("rb") as input_file:
         document = plistlib.load(input_file)
-    json_config = json.dumps(session_config, separators=(",", ":"))
     targets = [
         target
         for configuration in document.get("TestConfigurations", [])
@@ -584,7 +611,7 @@ def configure_test_run(source_xctestrun, session_config, xctestrun_path):
         for variable_name in ("EnvironmentVariables", "TestingEnvironmentVariables"):
             environment = target.setdefault(variable_name, {})
             environment["TEST_RUNNER_SESSION_CONFIG"] = str(session_config["_path"])
-            environment["TEST_RUNNER_SESSION_CONFIG_JSON"] = json_config
+            environment.pop("TEST_RUNNER_SESSION_CONFIG_JSON", None)
     with xctestrun_path.open("wb") as output_file:
         plistlib.dump(document, output_file)
 
@@ -800,6 +827,7 @@ def execute_session(
     harness_error = None
     live_readings = []
     seed_result = {}
+    registration = {}
     seed_env = node_environment({
         "HARNESS_NIGHTSCOUT_TOKEN": tokens[str(slot_number)]["accessToken"],
     })
@@ -892,9 +920,12 @@ def execute_session(
             bufsize=1,
             start_new_session=True,
         )
-        result_bundle = session_dir / "test-results.xcresult"
+        result_bundle_dir = STATE / "xcresults" / run_dir.name
+        result_bundle_dir.mkdir(parents=True, exist_ok=True)
+        result_bundle = result_bundle_dir / f"{session_id}.xcresult"
         test_env = node_environment()
         test_env.pop("TEST_RUNNER_SESSION_CONFIG", None)
+        test_env.pop("TEST_RUNNER_SESSION_CONFIG_JSON", None)
         test_exit_code = run_logged(
             [
                 "xcodebuild",
@@ -954,7 +985,7 @@ def execute_session(
             "harnessError": harness_error,
             "eventFile": str(event_file),
             "readings": seed_result.get("readings", []) + live_readings,
-            "episodes": registration.get("episodes", []) if "registration" in locals() else [],
+            "episodes": registration.get("episodes", []),
             "overheadMs": (
                 first_t0_display(event_file, seed_result.get("t0Sgv")) - session_started_ms
                 if first_t0_display(event_file, seed_result.get("t0Sgv")) is not None
@@ -1247,6 +1278,7 @@ def main():
         print(f"Scorecard: {run_dir / 'scorecard.md'}")
         return 0
     finally:
+        redact_result_artifacts(run_dir)
         if not args.keep_services_running:
             for simulator_id in simulators:
                 subprocess.run(

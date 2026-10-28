@@ -120,7 +120,7 @@ function perRequestFault(session, requestClass, requestIndex) {
   const rules = session.profile.per_request;
   const draw = randomFor(`${session.sessionSeed}:${requestClass}:${requestIndex}`);
   let cumulative = 0;
-  for (const name of session.profile.order) {
+  for (const name of session.profile.per_request.order) {
     const rule = rules[name];
     if (!rule || !rule.applies_to.includes(requestClass)) continue;
     cumulative += rule.p;

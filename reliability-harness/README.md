@@ -71,7 +71,7 @@ validation:
 
 ```sh
 reliability-harness/run.sh \
-  --app-ref HEAD \
+  --app-ref origin/devin/za-135-alarm-reliability-harness \
   --label quick-validation \
   --n 2 \
   --control-treatment-profile reliability-harness/profiles/fault-profile.pilot.json \
@@ -80,11 +80,13 @@ reliability-harness/run.sh \
 ```
 
 Index 0 is the healthy control and index 1 uses the pilot profile. For full
-arms, use one invocation per arm:
+arms, use the harness branch for control and merge it into the hypothesis
+branch before running treatment:
 
 ```sh
-reliability-harness/run.sh --app-ref HEAD --label healthy --n 24 --healthy --seed 135 --workers 2
-reliability-harness/run.sh --app-ref HEAD --label pilot --n 12 --profile reliability-harness/profiles/fault-profile.pilot.json --seed 135 --workers 2
+reliability-harness/run.sh --app-ref origin/devin/za-135-alarm-reliability-harness --label healthy --n 24 --healthy --seed 135 --workers 2
+git merge origin/devin/za-135-alarm-reliability-harness
+reliability-harness/run.sh --app-ref "$HYPOTHESIS_BRANCH" --label pilot --n 12 --profile reliability-harness/profiles/fault-profile.pilot.json --seed 135 --workers 2
 ```
 
 Current planning sizes are healthy N=24–50 as the time budget permits, pilot
@@ -118,13 +120,18 @@ reliability-harness/run.sh --merge "$VM1_RESULTS" "$VM2_RESULTS" "$VM3_RESULTS"
 Merge validates shared run metadata, deduplicates identical repeated
 `sessionIndex` rows, and errors if overlapping rows conflict. It writes a new
 `results.json`, `scorecard.md`, and `run.json` under `results/merged-*`.
+By default every index from `0` to `N-1` must be present; missing indices are
+listed as an error. `--allow-partial` merges an incomplete set and marks the
+scorecard `PARTIAL (k/N)`.
 
 The runner builds the requested app ref in a detached Git worktree with
 `xcodebuild build-for-testing`, then runs only
 `nightguardUITests/AlarmReliabilityUITests/testAlarmSession` using the resulting
-`.xctestrun`. Harness-only app and test changes in the current checkout are
-overlaid onto that worktree so the requested ref can use the measurement
-hooks. The runner recommends no more workers than it has measured.
+`.xctestrun`. The app ref must already contain the registered
+`AlarmReliabilityUITests.swift` and the `--reliability-host-uri` AppDelegate
+hook; refs that do not are rejected rather than overlaid. Uncommitted local
+changes are still copied into the build worktree. The runner recommends no
+more workers than it has measured.
 `--keep-services-running` leaves the local services and simulator devices
 running after the run.
 
@@ -135,14 +142,17 @@ Run output is written to `results/<label>-<timestamp>/`:
 - `gateway.jsonl` records gateway requests; token query values and authorization
   request path tokens are redacted.
 - `events/` contains host-wall-clock UI samples as JSONL.
-- `sessions/` contains per-session metadata, test logs, and result bundles.
+- `sessions/` contains per-session metadata and test logs.
 - `capacity.json` records the observed parallel worker count and sampled
   simulator/test-process CPU and memory use, plus a target-N time estimate.
 
 Per-slot access tokens, per-session runner configuration, MongoDB state,
-Nightscout checkout/dependencies, simulator clones, and Xcode build products
-are under `.state/`. Do not copy token/config files into results or commit
-runtime state. Generated results and `.state/` are gitignored.
+Nightscout checkout/dependencies, simulator clones, Xcode build products, and
+`.xcresult` bundles are under `.state/`. Access tokens are local synthetic
+Nightscout tokens; host URIs and tokens stay under `.state/session-configs/`
+and `.state/slots/`. Text artifacts under `results/` redact `token=` values.
+Do not copy token/config files into results or commit runtime state. Generated
+results and `.state/` are gitignored.
 
 ## Fault profile and scoring
 
@@ -158,6 +168,19 @@ Faults include held-open requests, HTTP 503, delays, stale cached entries,
 duplicate entries, JWT/v3 failure episodes, and a replica-B episode that
 connects to a closed localhost port and returns 502 after the real
 `ECONNREFUSED`.
+
+With replicas running, exercise the pilot per-request rules without simulators:
+
+```sh
+node reliability-harness/gateway/self-test.js \
+  --replica-a "$NS_A_PORT" \
+  --replica-b "$NS_B_PORT" \
+  --token-file reliability-harness/.state/slots/slot-1-token.json
+```
+
+This issues 200 requests per run against the real replicas, checks each
+ordered fault and deterministic decisions, and shortens only hold/delay
+durations for the self-test.
 
 The scorer uses Python 3's standard library and the frozen metric: the low
 reading must appear in the UI and a `Low BG` reason must appear no later than
@@ -179,11 +202,9 @@ do not modify app networking or alarm rules:
   last-update, and time labels. The BG label's accessibility value exposes the
   existing alarm reason to the test.
 - `nightguardUITests/AlarmReliabilityUITests.swift`: reads the session config
-  through `TEST_RUNNER_SESSION_CONFIG`, falling back to the same JSON supplied
-  through `TEST_RUNNER_SESSION_CONFIG_JSON` when the simulator runner cannot
-  read the host path. It samples the real UI once per second, notifies the
-  gateway when t0 first appears, and batches host JSONL writes through the
-  gateway control API.
+  through the host-only `TEST_RUNNER_SESSION_CONFIG` path. It samples the real
+  UI once per second, notifies the gateway when t0 first appears, and batches
+  host JSONL writes through the gateway control API.
 
 The Xcode project adds that test source to the existing UI-test target.
 
