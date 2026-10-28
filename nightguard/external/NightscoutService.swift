@@ -76,23 +76,46 @@ struct NightscoutHTTPError: LocalizedError {
     }
 }
 
+/// Per-request timeouts used by `NightscoutAPIClient`. `URLRequest`'s
+/// timeout is an idle timeout, so a held-open request fails after this long
+/// without any bytes and the caller can fall back or retry on the next poll.
+struct NightscoutRequestTimeouts {
+    /// `/api/v3/version` and the JWT exchange: tiny responses.
+    let handshake: TimeInterval
+    /// GET reads (v3 and v1).
+    let read: TimeInterval
+    /// Writes (treatments, care data).
+    let write: TimeInterval
+
+    #if os(watchOS)
+    // A watchOS widget extension often has to wake its radio before the
+    // request can start. Eight seconds proved too aggressive for that path
+    // and made otherwise healthy v3 servers look unavailable in background.
+    static let standard = NightscoutRequestTimeouts(handshake: 20, read: 20, write: 20)
+    #else
+    // The phone polls every 30 seconds while in the foreground. A single
+    // held-open request must not block a whole refresh for 20 seconds per
+    // hop (version, JWT, entries, v1 fallback).
+    static let standard = NightscoutRequestTimeouts(handshake: 5, read: 8, write: 20)
+    #endif
+}
+
 final class NightscoutAPIClient {
     static let shared = NightscoutAPIClient()
 
     private enum V3Support { case supported, unsupported }
-    private let defaultRequestTimeout: TimeInterval = 20
-    // A watchOS widget extension often has to wake its radio before the
-    // request can start. Eight seconds proved too aggressive for that path
-    // and made otherwise healthy v3 servers look unavailable in background.
-    private let v3ReadTimeout: TimeInterval = 20
+    private let timeouts: NightscoutRequestTimeouts
+    private var defaultRequestTimeout: TimeInterval { timeouts.write }
+    private var v3ReadTimeout: TimeInterval { timeouts.read }
     private let session: URLSession
     private let lock = NSLock()
     private var supportByServer: [String: V3Support] = [:]
     private var jwtByCredential: [String: String] = [:]
     private var pendingJWT: [String: [(Result<String, Error>) -> Void]] = [:]
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, timeouts: NightscoutRequestTimeouts = .standard) {
         self.session = session
+        self.timeouts = timeouts
     }
 
     @discardableResult
@@ -124,7 +147,7 @@ final class NightscoutAPIClient {
             baseURL: baseURL,
             trackedTask: trackedTask,
             allowTransportFallback: method.uppercased() == "GET" && fallbackOnTransportFailure,
-            timeout: effectiveReadTimeout
+            timeout: readTimeout ?? timeouts.handshake
         ) { result in
             switch result {
             case .failure(let error):
@@ -139,6 +162,7 @@ final class NightscoutAPIClient {
                         trackedTask: trackedTask,
                         compatibilityFallback: true,
                         useAccessTokenHeader: legacyUseAccessTokenHeader,
+                        readTimeout: effectiveReadTimeout,
                         completion: completion
                     )
                 } else {
@@ -273,6 +297,7 @@ final class NightscoutAPIClient {
                         trackedTask: trackedTask,
                         compatibilityFallback: true,
                         useAccessTokenHeader: legacyUseAccessTokenHeader,
+                        readTimeout: readTimeout,
                         completion: completion
                     )
                 } else {
@@ -283,7 +308,7 @@ final class NightscoutAPIClient {
             return
         }
 
-        obtainJWT(baseURL: baseURL, accessToken: accessToken, trackedTask: trackedTask, timeout: readTimeout) { jwtResult in
+        obtainJWT(baseURL: baseURL, accessToken: accessToken, trackedTask: trackedTask, timeout: min(readTimeout, timeouts.handshake)) { jwtResult in
             switch jwtResult {
             case .failure(let error):
                 trackedTask.finish()
@@ -303,6 +328,7 @@ final class NightscoutAPIClient {
                             trackedTask: trackedTask,
                             compatibilityFallback: true,
                             useAccessTokenHeader: legacyUseAccessTokenHeader,
+                            readTimeout: readTimeout,
                             completion: completion
                         )
                     } else {
@@ -353,7 +379,7 @@ final class NightscoutAPIClient {
         task.resume()
     }
 
-    private func performLegacy(_ endpoint: NightscoutLegacyEndpoint?, method: String, body: Data?, trackedTask: NightscoutRequestTask, compatibilityFallback: Bool = false, useAccessTokenHeader: Bool = false, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
+    private func performLegacy(_ endpoint: NightscoutLegacyEndpoint?, method: String, body: Data?, trackedTask: NightscoutRequestTask, compatibilityFallback: Bool = false, useAccessTokenHeader: Bool = false, readTimeout: TimeInterval? = nil, completion: @escaping (Result<(Data, HTTPURLResponse), Error>) -> Void) {
         guard let endpoint = endpoint,
               let url = legacyURL(endpoint, useAccessTokenHeader: useAccessTokenHeader) else {
             logError("Nightscout legacy request rejected: invalid endpoint")
@@ -365,7 +391,8 @@ final class NightscoutAPIClient {
         if compatibilityFallback {
             logInfo("Nightscout v1 compatibility request started \(endpointDescription)")
         }
-        var urlRequest = request(url: url, method: method, body: body)
+        let timeout = method.uppercased() == "GET" ? (readTimeout ?? v3ReadTimeout) : defaultRequestTimeout
+        var urlRequest = request(url: url, method: method, body: body, timeoutInterval: timeout)
         if useAccessTokenHeader {
             let accessToken = UserDefaultsRepository.nightscoutToken
             if !accessToken.isEmpty {
