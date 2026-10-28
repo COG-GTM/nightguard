@@ -173,6 +173,7 @@
 		435DFF7329E1E858007A25EA /* ViewExtension.swift in Sources */ = {isa = PBXBuildFile; fileRef = 435DFF7029E1E858007A25EA /* ViewExtension.swift */; };
 		43647BD81BFF6435004389F9 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 43647BD61BFF6435004389F9 /* LaunchScreen.storyboard */; };
 		43647BEE1BFF6435004389F9 /* NightguardUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43647BED1BFF6435004389F9 /* NightguardUITests.swift */; };
+		B3A7D1A10000000000000001 /* AlarmReliabilityUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3A7D1A10000000000000002 /* AlarmReliabilityUITests.swift */; };
 		43647BF31BFF6435004389F9 /* nightguard.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 43647BF21BFF6435004389F9 /* nightguard.app */; };
 		43647C0B1BFF6435004389F9 /* ExtensionDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43647C0A1BFF6435004389F9 /* ExtensionDelegate.swift */; };
 		436BE82D24A322AE00FDCBB5 /* BloodSugar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43F1E0EC1D07693300C329A2 /* BloodSugar.swift */; };
@@ -644,6 +645,7 @@
 		43647BE41BFF6435004389F9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		43647BE91BFF6435004389F9 /* nightguard_uitests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = nightguard_uitests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		43647BED1BFF6435004389F9 /* NightguardUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NightguardUITests.swift; sourceTree = "<group>"; };
+		B3A7D1A10000000000000002 /* AlarmReliabilityUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlarmReliabilityUITests.swift; sourceTree = "<group>"; };
 		43647BEF1BFF6435004389F9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		43647BF21BFF6435004389F9 /* nightguard.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = nightguard.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		43647BFC1BFF6435004389F9 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
@@ -943,6 +945,7 @@
 			children = (
 				28E3B4F02404075800A4EE25 /* SnapshotHelper.swift */,
 				43647BED1BFF6435004389F9 /* NightguardUITests.swift */,
+				B3A7D1A10000000000000002 /* AlarmReliabilityUITests.swift */,
 				43647BEF1BFF6435004389F9 /* Info.plist */,
 			);
 			path = nightguardUITests;
@@ -1807,6 +1810,7 @@
 				4302C6BC25DD98170052777F /* CarbCorrectionTreatment.swift in Sources */,
 				4378768E24FAAD0B009E163E /* UIScreen+AnimatedBrightness.swift in Sources */,
 				43647BEE1BFF6435004389F9 /* NightguardUITests.swift in Sources */,
+				B3A7D1A10000000000000001 /* AlarmReliabilityUITests.swift in Sources */,
 				4378767A24FAAC12009E163E /* SnoozeMessage.swift in Sources */,
 				4303406B24CA1DA40088AB9A /* DeviceStatusData.swift in Sources */,
 				4334D98224C32D7500652D87 /* DateExtension.swift in Sources */,

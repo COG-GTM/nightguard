@@ -1,0 +1,27 @@
+{
+  "name": "degraded-nightscout-pilot",
+  "version": 1,
+  "run_seed": 135,
+  "session_seed_rule": "sessionSeed = fnv1a32(`${run_seed}:${sessionIndex}`)",
+  "faults_start": "when the app first displays the session's t0 reading (warm-up is healthy); recorded as faultsStartAt",
+  "per_request": {
+    "_rule": "Draw u = mulberry32(fnv1a32(`${sessionSeed}:${endpointClass}:${perClassRequestIndex}`)). Walk faults in this order, first whose cumulative p covers u wins; else pass-through. Only classes listed in applies_to are eligible.",
+    "order": ["hang", "http_503", "slow", "stale_entries", "duplicate_entries"],
+    "hang":              { "p": 0.03, "applies_to": ["version", "jwt", "v3_entries", "v1_entries", "properties"], "max_hold_s": 120 },
+    "http_503":          { "p": 0.08, "applies_to": ["version", "jwt", "v3_entries", "v1_entries", "properties", "treatments", "devicestatus"] },
+    "slow":              { "p": 0.10, "applies_to": ["version", "jwt", "v3_entries", "v1_entries", "properties", "treatments", "devicestatus"], "delay_ms": [3000, 25000] },
+    "stale_entries":     { "p": 0.10, "applies_to": ["v3_entries", "v1_entries"], "serve": "the oldest of the last 3 successful upstream bodies for this session+class" },
+    "duplicate_entries": { "p": 0.15, "applies_to": ["v3_entries", "v1_entries"], "mutation": "duplicate every record; v1 copies keep _id with suffix '-dup', v3 copies get new identifier; same date/sgv" }
+  },
+  "episodes": {
+    "_rule": "Per session, each episode type independently occurs with p_session (draw from mulberry32(fnv1a32(`${sessionSeed}:episode:${type}`))); start offset uniform in start_window_s after faultsStartAt, duration uniform in duration_s. Episodes override per_request faults for affected classes.",
+    "jwt_auth_failure": { "p_session": 0.35, "start_window_s": [0, 600], "duration_s": [300, 900], "classes": ["jwt"], "status_choices": [500, 401] },
+    "v3_down":          { "p_session": 0.35, "start_window_s": [0, 600], "duration_s": [300, 900], "classes": ["version", "v3_entries"], "mode_choices": ["http_503", "conn_reset"] },
+    "replica_down":     { "p_session": 0.35, "start_window_s": [0, 600], "duration_s": [300, 900], "effect": "requests round-robined to replica B go to a closed port (real ECONNREFUSED) and the gateway answers 502 like an LB without health checks; replica A requests still succeed" }
+  },
+  "endpoint_classes": {
+    "version": "/api/v3/version", "jwt": "/api/v2/authorization/request/*", "v3_entries": "/api/v3/entries*",
+    "v1_entries": "/api/v1/entries*", "properties": "/api/v2/properties*", "treatments": "/api/*/treatments*",
+    "devicestatus": "/api/*/devicestatus*", "other": "everything else (pass-through, never faulted)"
+  }
+}
