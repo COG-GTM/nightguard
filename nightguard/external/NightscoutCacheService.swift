@@ -225,6 +225,7 @@ class NightscoutCacheService: NSObject {
         let shouldRefresh = serialQueue.sync { () -> Bool in
             todaysBgData = removeYesterdaysEntries(bgValues: todaysBgData)
             return todaysBgData.isEmpty || currentNightscoutData.isOlderThanYMinutes()
+                || NightscoutEntriesStream.shared.needsRefresh(displayedReadingMillis: currentNightscoutData.time.doubleValue)
                 || currentNightscoutWasFetchedInBackground(todaysBgData: todaysBgData)
         }
 
@@ -367,7 +368,8 @@ class NightscoutCacheService: NSObject {
     
     fileprivate func checkIfRefreshIsNeeded(_ resultHandler : @escaping (NightscoutRequestResult<NightscoutData>?) -> Void, forceRefresh: Bool = false) {
         
-        guard forceRefresh || currentNightscoutData.isOlderThanYMinutes() else {
+        guard forceRefresh || currentNightscoutData.isOlderThanYMinutes()
+                || NightscoutEntriesStream.shared.needsRefresh(displayedReadingMillis: currentNightscoutData.time.doubleValue) else {
             resultHandler(nil)
             return
         }
@@ -425,6 +427,14 @@ struct NightscoutEntryPollingSchedule {
         }
         nextRefreshAt = latestReadingAt.addingTimeInterval(readingInterval)
     }
+
+    mutating func completed(readings: [NightscoutEntryRecord], at now: Date) {
+        let latestReadingAt = readings
+            .filter { $0.type == "sgv" && $0.bloodSugar != nil && $0.dateMillis <= now.timeIntervalSince1970 * 1000 }
+            .map(\.dateMillis).max()
+            .map { Date(timeIntervalSince1970: $0 / 1000) }
+        completed(latestReadingAt: latestReadingAt, at: now)
+    }
 }
 
 /// One cache-coalesced stream for all glucose entries used by the app.
@@ -457,6 +467,13 @@ final class NightscoutEntriesStream {
             guard let nextRefreshAt = pollingSchedule.nextRefreshAt else { return maximum }
             let delay = nextRefreshAt.timeIntervalSinceNow
             return delay > 0 ? min(maximum, delay) : maximum
+        }
+    }
+
+    func needsRefresh(displayedReadingMillis: Double) -> Bool {
+        queue.sync {
+            syncInFlight || pollingSchedule.isRefreshDue(at: Date())
+                || records.contains { $0.type == "sgv" && $0.bloodSugar != nil && $0.dateMillis > displayedReadingMillis }
         }
     }
 
@@ -615,11 +632,7 @@ final class NightscoutEntriesStream {
                 records = deduplicated(records + incoming)
                 records = prune(records)
                 let now = Date()
-                let latestReadingAt = records
-                    .filter { $0.type == "sgv" && $0.bloodSugar != nil && $0.dateMillis <= now.timeIntervalSince1970 * 1000 }
-                    .map(\.dateMillis).max()
-                    .map { Date(timeIntervalSince1970: $0 / 1000) }
-                pollingSchedule.completed(latestReadingAt: latestReadingAt, at: now)
+                pollingSchedule.completed(readings: incoming, at: now)
                 NightscoutDataRepository.singleton.storeNightscoutEntries(records)
                 let addedOrUpdated = max(0, records.count - before)
                 let oldest = records.map(\.dateMillis).min().map { Date(timeIntervalSince1970: $0 / 1000).description } ?? "-"

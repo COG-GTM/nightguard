@@ -50,6 +50,28 @@ final class NightscoutCacheServiceTest: XCTestCase {
         XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(30))
     }
 
+    func testEmptyResponseRetriesDespiteRecentCachedReading() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now, at: now)
+        schedule.completed(readings: [], at: now.addingTimeInterval(60))
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(90))
+    }
+
+    func testUnusableResponseRetriesDespiteRecentCachedReading() {
+        let now = Date()
+        let futureReading = NightscoutEntryRecord(
+            storageKey: "future", dateMillis: now.addingTimeInterval(600).timeIntervalSince1970 * 1000,
+            type: "sgv", sgv: 100, mbg: nil, direction: "-"
+        )
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now, at: now)
+        schedule.completed(readings: [futureReading], at: now)
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(30))
+    }
+
     func testDelayedResponseUsesNextReadingTime() {
         let now = Date()
         var schedule = NightscoutEntryPollingSchedule()
