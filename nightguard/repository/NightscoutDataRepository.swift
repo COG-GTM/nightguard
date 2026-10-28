@@ -82,6 +82,19 @@ struct NightscoutEntryRecord: Codable, Hashable {
         return nil
     }
 
+    /// Identity of the reading itself, independent of the server-side document id.
+    /// Nightscout can return the same CGM reading under several ids (uploader retries,
+    /// v1/v3 responses), so two records with the same type and timestamp are one reading.
+    var readingKey: String {
+        "\(type):\(dateMillis.rounded())"
+    }
+
+    static func deduplicatedByReading(_ values: [NightscoutEntryRecord]) -> [NightscoutEntryRecord] {
+        var byKey: [String: NightscoutEntryRecord] = [:]
+        values.forEach { byKey[$0.readingKey] = $0 }
+        return byKey.values.sorted { $0.dateMillis < $1.dateMillis }
+    }
+
     private var normalizedArrow: String {
         switch direction ?? "" {
         case "DoubleUp": return "↑↑"

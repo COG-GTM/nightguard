@@ -8,7 +8,13 @@ import XCTest
 
 final class NightscoutCacheServiceTest: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        NightscoutCacheService.singleton.resetCache()
+    }
+
     override func tearDown() {
+        NightscoutCacheService.singleton.resetCache()
         NightscoutCacheService.singleton.updateTodaysBgDataForTesting([])
 
         let defaults = UserDefaults(suiteName: AppConstants.APP_GROUP_ID)
@@ -67,6 +73,76 @@ final class NightscoutCacheServiceTest: XCTestCase {
         let activation = AlarmRule.getAlarmActivation(ignoreSnooze: true)
 
         XCTAssertNil(activation)
+    }
+
+    func testDuplicateReadingsWithDifferentIdsCollapseToOneReading() {
+        let millis = Date().addingTimeInterval(-5 * 60).timeIntervalSince1970 * 1000
+        let records = [
+            NightscoutEntryRecord(identifier: "a1", dateMillis: millis, type: "sgv", sgv: 70),
+            NightscoutEntryRecord(identifier: "a1-dup", dateMillis: millis, type: "sgv", sgv: 70),
+            NightscoutEntryRecord(objectID: "b2", dateMillis: millis, type: "sgv", sgv: 70),
+            NightscoutEntryRecord(identifier: "c3", dateMillis: millis - 5 * 60 * 1000, type: "sgv", sgv: 90)
+        ]
+
+        let deduplicated = NightscoutEntryRecord.deduplicatedByReading(records)
+
+        XCTAssertEqual(deduplicated.map(\.sgv), [90, 70])
+    }
+
+    func testStaleResponseDoesNotRollBackNewestReading() {
+        let newest = nightscoutData(sgv: "70", date: Date().addingTimeInterval(-1 * 60))
+        let stale = nightscoutData(sgv: "120", date: Date().addingTimeInterval(-20 * 60))
+
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: newest)
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: stale)
+
+        let current = NightscoutCacheService.singleton.getCurrentNightscoutData()
+        XCTAssertEqual(current.sgv, "70")
+        XCTAssertEqual(current.time, newest.time)
+    }
+
+    func testNewerReadingStillReplacesCurrentReading() {
+        let older = nightscoutData(sgv: "120", date: Date().addingTimeInterval(-10 * 60))
+        let newer = nightscoutData(sgv: "70", date: Date().addingTimeInterval(-1 * 60))
+
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: older)
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: newer)
+
+        XCTAssertEqual(NightscoutCacheService.singleton.getCurrentNightscoutData().sgv, "70")
+    }
+
+    func testMissedReadingsUsesNewestKnownReading() {
+        enableMissedReadingsAlarm(afterMinutes: 15)
+        let fresh = nightscoutData(sgv: "100", date: Date().addingTimeInterval(-2 * 60))
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: fresh)
+
+        let staleMillis = Date().addingTimeInterval(-40 * 60).timeIntervalSince1970 * 1000
+        let activation = AlarmRule.noDataActivation(readingMillis: staleMillis)
+
+        XCTAssertNil(activation)
+    }
+
+    func testMissedReadingsFiresWhenNoFreshReadingIsKnown() {
+        enableMissedReadingsAlarm(afterMinutes: 15)
+        let old = nightscoutData(sgv: "100", date: Date().addingTimeInterval(-16 * 60))
+        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: old)
+
+        let activation = AlarmRule.noDataActivation(readingMillis: old.time.doubleValue)
+
+        XCTAssertEqual(activation?.kind, .missedReadings)
+    }
+
+    private func enableMissedReadingsAlarm(afterMinutes minutes: Int) {
+        let defaults = UserDefaults(suiteName: AppConstants.APP_GROUP_ID)
+        defaults?.set(true, forKey: AlarmRule.noDataAlarmEnabled.key)
+        defaults?.set(minutes, forKey: AlarmRule.minutesWithoutValues.key)
+    }
+
+    private func nightscoutData(sgv: String, date: Date) -> NightscoutData {
+        let data = NightscoutData()
+        data.sgv = sgv
+        data.time = NSNumber(value: date.timeIntervalSince1970 * 1000)
+        return data
     }
 
     private func reading(value: Float, date: Date) -> BloodSugar {

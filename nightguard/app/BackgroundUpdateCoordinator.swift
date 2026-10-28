@@ -75,25 +75,25 @@ final class BackgroundUpdateCoordinator {
                         let storedHistory = NightscoutDataRepository.singleton.loadTodaysBgData()
                         let historyValues = self.mergeHistory(storedHistory + fetchedHistory, including: nightscoutData)
 
-                        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: nightscoutData)
+                        let publishedData = NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: nightscoutData)
                         NightscoutDataRepository.singleton.storeTodaysBgData(historyValues)
                         let snapshot = NightscoutDataRepository.singleton.storeLatestDisplaySnapshot(
-                            from: nightscoutData,
+                            from: publishedData,
                             previousValues: historyValues
                         )
-                        let hasNewData = nightscoutData.time.doubleValue > previousTimestamp
+                        let hasNewData = publishedData.time.doubleValue > previousTimestamp
 
                         AppLogger.singleton.info(
-                            "\(trigger.rawValue) published display state: SGV=\(nightscoutData.sgv), timestamp=\(nightscoutData.time), history=\(historyValues.count), hasNewData=\(hasNewData)",
+                            "\(trigger.rawValue) published display state: SGV=\(publishedData.sgv), timestamp=\(publishedData.time), history=\(historyValues.count), hasNewData=\(hasNewData)",
                             category: .backgroundUpdates
                         )
 
                         // Publish the critical display state before optional
                         // background work can consume the remaining budget.
-                        AlarmNotificationService.singleton.notifyIfAlarmActivated(nightscoutData)
+                        AlarmNotificationService.singleton.notifyIfAlarmActivated(publishedData)
                         self.reloadWidgetTimelines(trigger: trigger)
                         WatchService.singleton.sendToWatchCurrentNightwatchData(
-                            nightscoutData: nightscoutData,
+                            nightscoutData: publishedData,
                             displaySnapshot: snapshot
                         )
 
@@ -103,7 +103,7 @@ final class BackgroundUpdateCoordinator {
 
                         Task {
                             if #available(iOS 16.1, *) {
-                                let updateResult = await LiveActivityManager.shared.refreshActivitiesForBackgroundUpdate(with: nightscoutData)
+                                let updateResult = await LiveActivityManager.shared.refreshActivitiesForBackgroundUpdate(with: publishedData)
                                 let logMessage = "\(trigger.rawValue) Live Activity refresh result: activities=\(updateResult.activityCount), endedExpired=\(updateResult.endedExpiredActivityCount), updated=\(updateResult.updatedActivityCount), started=\(updateResult.startedActivityCount), message=\(updateResult.message)"
                                 if updateResult.didChangeAnyActivity {
                                     AppLogger.singleton.info(logMessage, category: .backgroundUpdates)
