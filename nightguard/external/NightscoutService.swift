@@ -634,10 +634,10 @@ struct NightscoutRetryPolicy {
             return [408, 429, 500, 502, 503, 504].contains(httpError.statusCode)
         }
         let nsError = error as NSError
-        guard nsError.domain == NSURLErrorDomain,
-              let urlErrorCode = URLError.Code(rawValue: nsError.code) else {
+        guard nsError.domain == NSURLErrorDomain else {
             return false
         }
+        let urlErrorCode = URLError.Code(rawValue: nsError.code)
         switch urlErrorCode {
         case .timedOut, .cannotConnectToHost, .networkConnectionLost, .cannotFindHost,
              .dnsLookupFailed, .badServerResponse:
