@@ -614,6 +614,40 @@ enum NightscoutRequestResult<T> {
     case error(Error)
 }
 
+struct NightscoutRetryPolicy {
+    let maxAttempts: Int
+    let baseDelay: TimeInterval
+    let maxDelay: TimeInterval
+    let maxElapsed: TimeInterval
+    let jitter: () -> Double
+
+    static let entriesFetch = NightscoutRetryPolicy(maxAttempts: 3, baseDelay: 1, maxDelay: 4, maxElapsed: 45, jitter: { Double.random(in: 0..<1) })
+
+    /// retry is 1 for the first retry. Capped exponential with "equal jitter": [cap/2, cap).
+    func delay(beforeRetry retry: Int) -> TimeInterval {
+        let cap = min(maxDelay, baseDelay * pow(2, Double(max(0, retry - 1))))
+        return cap / 2 + (cap / 2) * jitter()
+    }
+
+    static func isTransient(_ error: Error) -> Bool {
+        if let httpError = error as? NightscoutHTTPError {
+            return [408, 429, 500, 502, 503, 504].contains(httpError.statusCode)
+        }
+        let nsError = error as NSError
+        guard nsError.domain == NSURLErrorDomain,
+              let urlErrorCode = URLError.Code(rawValue: nsError.code) else {
+            return false
+        }
+        switch urlErrorCode {
+        case .timedOut, .cannotConnectToHost, .networkConnectionLost, .cannotFindHost,
+             .dnsLookupFailed, .badServerResponse:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
 final class HybridEntriesAccumulator {
     private let lock = NSLock()
     private var receivedSources: [String] = []
@@ -767,6 +801,8 @@ class NightscoutService {
     /// views from one synchronized snapshot.
     @discardableResult
     func readEntriesHead(
+        apiClient: NightscoutAPIClient = .shared,
+        retryPolicy: NightscoutRetryPolicy = .entriesFetch,
         resultHandler: @escaping (NightscoutRequestResult<[NightscoutEntryRecord]>) -> Void
     ) -> NightscoutTask? {
         guard !UserDefaultsRepository.baseUri.value.isEmpty else {
@@ -802,37 +838,76 @@ class NightscoutService {
             }
         }
 
-        let v3Task = NightscoutAPIClient.shared.requestV3(
-            path: "api/v3/entries",
-            query: [
-                "date$gte": "\(streamCutoffMillis)",
-                "sort$desc": "date",
-                "type$in": "sgv|mbg",
-                "limit": "500",
-                "fields": "identifier,_id,date,dateString,mills,type,sgv,mbg,direction,units"
-            ],
-            legacy: NightscoutLegacyEndpoint(
-                path: "api/v1/entries.json",
-                query: ["count": "500"]
-            ),
-            fallbackOnTransportFailure: true,
-            legacyUseAccessTokenHeader: true
-        ) { result in
-            switch result {
-            case .success(let response):
-                // requestV3 transparently uses the configured v1 endpoint
-                // when v3 is unavailable or a transient transport failure
-                // occurs. The API client logs that transition explicitly.
-                parseResponse(response.0, "v3-or-v1-compatibility")
-            case .failure(let error):
-                AppLogger.singleton.error(
-                    "NightscoutService: entries stream failed after v3/compatibility handling: \(error.localizedDescription)",
-                    category: .nightscout
-                )
-                finish(.error(error))
+        func attempt(_ attemptNumber: Int) {
+            let requestTask = apiClient.requestV3(
+                path: "api/v3/entries",
+                query: [
+                    "date$gte": "\(streamCutoffMillis)",
+                    "sort$desc": "date",
+                    "type$in": "sgv|mbg",
+                    "limit": "500",
+                    "fields": "identifier,_id,date,dateString,mills,type,sgv,mbg,direction,units"
+                ],
+                legacy: NightscoutLegacyEndpoint(
+                    path: "api/v1/entries.json",
+                    query: ["count": "500"]
+                ),
+                fallbackOnTransportFailure: true,
+                legacyUseAccessTokenHeader: true
+            ) { result in
+                switch result {
+                case .success(let response):
+                    // requestV3 transparently uses the configured v1 endpoint
+                    // when v3 is unavailable or a transient transport failure
+                    // occurs. The API client logs that transition explicitly.
+                    parseResponse(response.0, "v3-or-v1-compatibility")
+                case .failure(let error):
+                    let nsError = error as NSError
+                    let errorSummary: String
+                    if let httpError = error as? NightscoutHTTPError {
+                        errorSummary = "HTTP \(httpError.statusCode)"
+                    } else {
+                        errorSummary = "\(nsError.domain) error \(nsError.code)"
+                    }
+                    if NightscoutRetryPolicy.isTransient(error),
+                       attemptNumber < retryPolicy.maxAttempts,
+                       trackedTask.nightscoutIsRunning {
+                        let delay = retryPolicy.delay(beforeRetry: attemptNumber)
+                        let elapsed = Date().timeIntervalSince(startedAt)
+                        if elapsed + delay <= retryPolicy.maxElapsed {
+                            AppLogger.singleton.warning(
+                                "NightscoutService: entries stream attempt \(attemptNumber) failed (\(errorSummary)); retrying in \(String(format: "%.3f", delay))s",
+                                category: .nightscout
+                            )
+                            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay) {
+                                guard trackedTask.nightscoutIsRunning else {
+                                    finish(.error(URLError(.cancelled)))
+                                    return
+                                }
+                                guard Date().timeIntervalSince(startedAt) <= retryPolicy.maxElapsed else {
+                                    AppLogger.singleton.error(
+                                        "NightscoutService: entries stream failed after v3/compatibility handling: \(errorSummary)",
+                                        category: .nightscout
+                                    )
+                                    finish(.error(error))
+                                    return
+                                }
+                                attempt(attemptNumber + 1)
+                            }
+                            return
+                        }
+                    }
+                    AppLogger.singleton.error(
+                        "NightscoutService: entries stream failed after v3/compatibility handling: \(errorSummary)",
+                        category: .nightscout
+                    )
+                    finish(.error(error))
+                }
             }
+            if let requestTask { trackedTask.add(requestTask) }
         }
-        if let v3Task { trackedTask.add(v3Task) }
+
+        attempt(1)
         return trackedTask
     }
 

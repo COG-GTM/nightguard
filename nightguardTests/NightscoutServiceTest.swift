@@ -34,6 +34,24 @@ private final class NightscoutMockURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+private final class NightscoutRequestCounts {
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+
+    func increment(_ path: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        counts[path, default: 0] += 1
+        return counts[path] ?? 0
+    }
+
+    func count(_ path: String) -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return counts[path, default: 0]
+    }
+}
+
 class NightscoutServiceTest: XCTestCase {
 
     func testHybridEntriesWaitsForFreshFallbackWhenV3HeadIsStale() {
@@ -505,6 +523,211 @@ class NightscoutServiceTest: XCTestCase {
         XCTAssertEqual(requestedPaths.filter { $0 == "/api/v2/authorization/request/token=care-secret" }.count, 2)
         XCTAssertEqual(requestedPaths.filter { $0 == "/api/v3/entries" }.count, 2)
         XCTAssertFalse(requestedPaths.contains("/api/v1/entries.json"))
+    }
+
+    func testEntriesHeadRetriesTransient503ThenSucceeds() {
+        let restoreCredentials = useTemporaryCredentials(url: "https://retry-entries.example.org", token: "care-secret")
+        defer {
+            restoreCredentials()
+            NightscoutMockURLProtocol.handler = nil
+        }
+        let (client, requestCounts) = installEntriesHeadMock { path, attempt in
+            path == "/api/v3/entries" && attempt == 1 ? 503 : 200
+        }
+        let expectation = expectation(description: "entries retry succeeds")
+
+        _ = NightscoutService.singleton.readEntriesHead(apiClient: client, retryPolicy: zeroDelayRetryPolicy) { result in
+            guard case .data(let records) = result else {
+                XCTFail("Expected entries retry to succeed")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertEqual(records.count, 1)
+            XCTAssertEqual(records.first?.sgv, 64)
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(requestCounts.count("/api/v3/entries"), 2)
+    }
+
+    func testEntriesHeadRetriesWhenCapabilityCheckReturns502() {
+        let restoreCredentials = useTemporaryCredentials(url: "https://retry-version.example.org", token: "care-secret")
+        defer {
+            restoreCredentials()
+            NightscoutMockURLProtocol.handler = nil
+        }
+        let (client, requestCounts) = installEntriesHeadMock { path, attempt in
+            path == "/api/v3/version" && attempt == 1 ? 502 : 200
+        }
+        let expectation = expectation(description: "capability retry succeeds")
+
+        _ = NightscoutService.singleton.readEntriesHead(apiClient: client, retryPolicy: zeroDelayRetryPolicy) { result in
+            guard case .data = result else {
+                XCTFail("Expected entries fetch after capability retry to succeed")
+                expectation.fulfill()
+                return
+            }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(requestCounts.count("/api/v3/version"), 2)
+    }
+
+    func testEntriesHeadStopsAfterMaxAttempts() {
+        let restoreCredentials = useTemporaryCredentials(url: "https://retry-exhausted.example.org", token: "care-secret")
+        defer {
+            restoreCredentials()
+            NightscoutMockURLProtocol.handler = nil
+        }
+        let (client, requestCounts) = installEntriesHeadMock { path, _ in
+            path == "/api/v3/entries" ? 503 : 200
+        }
+        let expectation = expectation(description: "entries retry exhausted")
+
+        _ = NightscoutService.singleton.readEntriesHead(apiClient: client, retryPolicy: zeroDelayRetryPolicy) { result in
+            guard case .error(let error) = result,
+                  let httpError = error as? NightscoutHTTPError else {
+                XCTFail("Expected the final HTTP 503 error")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertEqual(httpError.statusCode, 503)
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(requestCounts.count("/api/v3/entries"), 3)
+    }
+
+    func testEntriesHeadDoesNotRetryForbidden() {
+        let restoreCredentials = useTemporaryCredentials(url: "https://retry-forbidden.example.org", token: "care-secret")
+        defer {
+            restoreCredentials()
+            NightscoutMockURLProtocol.handler = nil
+        }
+        let (client, requestCounts) = installEntriesHeadMock { path, _ in
+            path == "/api/v3/entries" ? 403 : 200
+        }
+        let expectation = expectation(description: "forbidden entries response")
+
+        _ = NightscoutService.singleton.readEntriesHead(apiClient: client, retryPolicy: zeroDelayRetryPolicy) { result in
+            guard case .error(let error) = result,
+                  let httpError = error as? NightscoutHTTPError else {
+                XCTFail("Expected the HTTP 403 error")
+                expectation.fulfill()
+                return
+            }
+            XCTAssertEqual(httpError.statusCode, 403)
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(requestCounts.count("/api/v3/entries"), 1)
+    }
+
+    func testEntriesHeadDoesNotRetryPastElapsedBudget() {
+        let restoreCredentials = useTemporaryCredentials(url: "https://retry-budget.example.org", token: "care-secret")
+        defer {
+            restoreCredentials()
+            NightscoutMockURLProtocol.handler = nil
+        }
+        let (client, requestCounts) = installEntriesHeadMock { path, _ in
+            path == "/api/v3/entries" ? 503 : 200
+        }
+        let retryPolicy = NightscoutRetryPolicy(maxAttempts: 3, baseDelay: 0.01, maxDelay: 0.01, maxElapsed: 0, jitter: { 0 })
+        let expectation = expectation(description: "elapsed retry budget exhausted")
+
+        _ = NightscoutService.singleton.readEntriesHead(apiClient: client, retryPolicy: retryPolicy) { result in
+            guard case .error = result else {
+                XCTFail("Expected the HTTP error when retry is outside the elapsed budget")
+                expectation.fulfill()
+                return
+            }
+            expectation.fulfill()
+        }
+
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(requestCounts.count("/api/v3/entries"), 1)
+    }
+
+    func testRetryPolicyBackoffAndTransientClassification() {
+        let policy = NightscoutRetryPolicy(maxAttempts: 3, baseDelay: 1, maxDelay: 4, maxElapsed: 45, jitter: { 0 })
+        let expectedDelays: [TimeInterval] = [0.5, 1, 2, 2]
+        for (index, expected) in expectedDelays.enumerated() {
+            XCTAssertEqual(policy.delay(beforeRetry: index + 1), expected, accuracy: 0.0001)
+        }
+
+        let highJitterPolicy = NightscoutRetryPolicy(maxAttempts: 3, baseDelay: 1, maxDelay: 4, maxElapsed: 45, jitter: { 0.999 })
+        XCTAssertLessThan(highJitterPolicy.delay(beforeRetry: 4), 4)
+
+        for statusCode in [503, 502, 500, 504, 429, 408] {
+            XCTAssertTrue(
+                NightscoutRetryPolicy.isTransient(NightscoutHTTPError(statusCode: statusCode, endpoint: "/api/v3/entries")),
+                "Expected HTTP \(statusCode) to be transient"
+            )
+        }
+        for code in [URLError.Code.timedOut, .cannotConnectToHost, .networkConnectionLost] {
+            XCTAssertTrue(NightscoutRetryPolicy.isTransient(URLError(code)))
+        }
+        XCTAssertTrue(NightscoutRetryPolicy.isTransient(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadServerResponse)))
+
+        for statusCode in [401, 403, 404] {
+            XCTAssertFalse(
+                NightscoutRetryPolicy.isTransient(NightscoutHTTPError(statusCode: statusCode, endpoint: "/api/v3/entries")),
+                "Expected HTTP \(statusCode) not to be transient"
+            )
+        }
+        XCTAssertFalse(NightscoutRetryPolicy.isTransient(URLError(.cancelled)))
+        XCTAssertFalse(NightscoutRetryPolicy.isTransient(URLError(.badURL)))
+        XCTAssertFalse(NightscoutRetryPolicy.isTransient(NSError(domain: "NightscoutDecodeError", code: 1)))
+    }
+
+    private var zeroDelayRetryPolicy: NightscoutRetryPolicy {
+        NightscoutRetryPolicy(maxAttempts: 3, baseDelay: 0, maxDelay: 0, maxElapsed: 45, jitter: { 0 })
+    }
+
+    private func installEntriesHeadMock(
+        statusForRequest: @escaping (_ path: String, _ attempt: Int) -> Int
+    ) -> (NightscoutAPIClient, NightscoutRequestCounts) {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        let requestCounts = NightscoutRequestCounts()
+        let entryBody = Data("[{\"identifier\":\"a\",\"date\":1730000000000,\"type\":\"sgv\",\"sgv\":64}]".utf8)
+
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let path: String
+            if url.path.hasSuffix("/api/v3/version") {
+                path = "/api/v3/version"
+            } else if url.path.contains("/api/v2/authorization/request/") {
+                path = "/api/v2/authorization/request"
+            } else if url.path.hasSuffix("/api/v3/entries") {
+                path = "/api/v3/entries"
+            } else if url.path.hasSuffix("/api/v1/entries.json") {
+                path = "/api/v1/entries.json"
+            } else {
+                path = url.path
+            }
+            let attempt = requestCounts.increment(path)
+            let statusCode = statusForRequest(path, attempt)
+            let data: Data
+            switch path {
+            case "/api/v2/authorization/request":
+                data = Data("{\"token\":\"temporary-jwt\"}".utf8)
+            case "/api/v3/entries", "/api/v1/entries.json":
+                data = entryBody
+            default:
+                data = Data("{}".utf8)
+            }
+            return (
+                try XCTUnwrap(HTTPURLResponse(url: url, statusCode: statusCode, httpVersion: nil, headerFields: nil)),
+                data
+            )
+        }
+        return (client, requestCounts)
     }
 
     private func useTemporaryCredentials(url: String, token: String) -> () -> Void {
