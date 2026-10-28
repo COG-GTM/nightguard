@@ -88,11 +88,23 @@ final class NightscoutAPIClient {
     private let session: URLSession
     private let lock = NSLock()
     private var supportByServer: [String: V3Support] = [:]
-    private var jwtByCredential: [String: String] = [:]
+    private struct CachedJWT {
+        let token: String
+        let obtainedAt: Date
+        let expiresAt: Date?
+    }
+    // Refresh a JWT this long before it expires (capped at a quarter of its
+    // lifetime) so a slow or failing auth endpoint never blocks a read while
+    // the current token is still accepted.
+    private let jwtRefreshLead: TimeInterval = 15 * 60
+    private let jwtExpirySafetyMargin: TimeInterval = 30
+    private let now: () -> Date
+    private var jwtByCredential: [String: CachedJWT] = [:]
     private var pendingJWT: [String: [(Result<String, Error>) -> Void]] = [:]
 
-    init(session: URLSession = .shared) {
+    init(session: URLSession = .shared, now: @escaping () -> Date = Date.init) {
         self.session = session
+        self.now = now
     }
 
     @discardableResult
@@ -286,13 +298,35 @@ final class NightscoutAPIClient {
         obtainJWT(baseURL: baseURL, accessToken: accessToken, trackedTask: trackedTask, timeout: readTimeout) { jwtResult in
             switch jwtResult {
             case .failure(let error):
-                trackedTask.finish()
-                completion(.failure(error))
+                if allowLegacyFallback, method.uppercased() == "GET", legacy != nil {
+                    self.logWarning("Nightscout JWT unavailable (\(self.errorSummary(error))); using v1 compatibility mode")
+                    self.performLegacy(
+                        legacy,
+                        method: method,
+                        body: body,
+                        trackedTask: trackedTask,
+                        compatibilityFallback: true,
+                        useAccessTokenHeader: legacyUseAccessTokenHeader
+                    ) { legacyResult in
+                        // If the token itself was denied and v1 also fails,
+                        // report the credential error rather than the v1 one.
+                        if case .failure = legacyResult,
+                           let authError = error as? NightscoutHTTPError,
+                           authError.statusCode == 401 || authError.statusCode == 403 {
+                            completion(.failure(authError))
+                        } else {
+                            completion(legacyResult)
+                        }
+                    }
+                } else {
+                    trackedTask.finish()
+                    completion(.failure(error))
+                }
             case .success(let jwt):
                 self.performV3Request(baseURL: baseURL, path: path, query: query, method: method, body: body, jwt: jwt, trackedTask: trackedTask, readTimeout: readTimeout) { result in
                     if case .failure(let error as NightscoutHTTPError) = result,
                        error.statusCode == 401, mayRefreshJWT {
-                        self.invalidateJWT(baseURL: baseURL, accessToken: accessToken)
+                        self.invalidateJWT(baseURL: baseURL, accessToken: accessToken, rejected: jwt)
                         self.performAuthorizedV3(baseURL: baseURL, path: path, query: query, method: method, body: body, legacy: legacy, trackedTask: trackedTask, mayRefreshJWT: false, fallbackOnTransportFailure: fallbackOnTransportFailure, allowLegacyFallback: allowLegacyFallback, readTimeout: readTimeout, legacyUseAccessTokenHeader: legacyUseAccessTokenHeader, completion: completion)
                     } else if allowLegacyFallback && self.shouldFallbackToLegacy(result: result, method: method, legacy: legacy, allowUnauthorized: false, allowTransportFailure: fallbackOnTransportFailure) {
                         self.logWarning("Nightscout v3 GET failed (\(self.resultErrorSummary(result))); using v1 compatibility mode")
@@ -422,11 +456,21 @@ final class NightscoutAPIClient {
 
     private func obtainJWT(baseURL: URL, accessToken: String, trackedTask: NightscoutRequestTask, timeout: TimeInterval, completion: @escaping (Result<String, Error>) -> Void) {
         let key = credentialKey(baseURL: baseURL, accessToken: accessToken)
+        let currentTime = now()
         lock.lock()
-        if let jwt = jwtByCredential[key] {
+        if let cached = jwtByCredential[key], isUsable(cached, at: currentTime) {
+            let refreshDue = needsRefresh(cached, at: currentTime) && pendingJWT[key] == nil
+            if refreshDue {
+                pendingJWT[key] = []
+            }
             lock.unlock()
-            logInfo("V3 JWT cache hit server=\(baseURL.host ?? "unknown")")
-            completion(.success(jwt))
+            logInfo("V3 JWT cache hit server=\(baseURL.host ?? "unknown") refreshDue=\(refreshDue)")
+            if refreshDue {
+                // Keep serving the current token; the refresh result (or its
+                // failure) only affects later requests.
+                fetchJWT(key: key, baseURL: baseURL, accessToken: accessToken, trackedTask: nil, timeout: timeout)
+            }
+            completion(.success(cached.token))
             return
         }
         if pendingJWT[key] != nil {
@@ -436,14 +480,17 @@ final class NightscoutAPIClient {
         }
         pendingJWT[key] = [completion]
         lock.unlock()
+        fetchJWT(key: key, baseURL: baseURL, accessToken: accessToken, trackedTask: trackedTask, timeout: timeout)
+    }
 
+    private func fetchJWT(key: String, baseURL: URL, accessToken: String, trackedTask: NightscoutRequestTask?, timeout: TimeInterval) {
         guard let url = makeURL(baseURL: baseURL, path: "api/v2/authorization/request/token=\(accessToken)", query: [:]) else {
             logError("Nightscout JWT request rejected: invalid server URL")
             completeJWT(key: key, result: .failure(NSError(domain: NSURLErrorDomain, code: NSURLErrorBadURL)))
             return
         }
         let startedAt = Date()
-        logInfo("V3 JWT request started server=\(baseURL.host ?? "unknown") timeout=\(Int(timeout))s")
+        logInfo("V3 JWT request started server=\(baseURL.host ?? "unknown") timeout=\(Int(timeout))s background=\(trackedTask == nil)")
         let task = session.dataTask(with: request(url: url, method: "GET", body: nil, timeoutInterval: timeout)) { data, response, error in
             if let error = error {
                 let duration = Int(Date().timeIntervalSince(startedAt) * 1000)
@@ -468,14 +515,47 @@ final class NightscoutAPIClient {
                 self.completeJWT(key: key, result: .failure(NSError(domain: NSURLErrorDomain, code: NSURLErrorCannotParseResponse)))
                 return
             }
+            let expiresAt = Self.jwtExpiry(responseExp: json["exp"], token: jwt)
             self.lock.lock()
-            self.jwtByCredential[key] = jwt
+            self.jwtByCredential[key] = CachedJWT(token: jwt, obtainedAt: self.now(), expiresAt: expiresAt)
             self.lock.unlock()
-            self.logInfo("V3 JWT response HTTP \(http.statusCode) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) tokenCached=true")
+            self.logInfo("V3 JWT response HTTP \(http.statusCode) durationMs=\(Int(Date().timeIntervalSince(startedAt) * 1000)) tokenCached=true expiresInS=\(expiresAt.map { Int($0.timeIntervalSince(self.now())) } ?? -1)")
             self.completeJWT(key: key, result: .success(jwt))
         }
-        trackedTask.add(task)
+        trackedTask?.add(task)
         task.resume()
+    }
+
+    private func isUsable(_ cached: CachedJWT, at date: Date) -> Bool {
+        guard let expiresAt = cached.expiresAt else { return true }
+        return date < expiresAt.addingTimeInterval(-jwtExpirySafetyMargin)
+    }
+
+    private func needsRefresh(_ cached: CachedJWT, at date: Date) -> Bool {
+        guard let expiresAt = cached.expiresAt else { return false }
+        let lifetime = expiresAt.timeIntervalSince(cached.obtainedAt)
+        let lead = min(jwtRefreshLead, max(lifetime / 4, 0))
+        // Open the refresh window before the usability cutoff so short-lived
+        // tokens are still refreshed in the background.
+        return date >= expiresAt.addingTimeInterval(-(jwtExpirySafetyMargin + lead))
+    }
+
+    /// Expiry from the authorization response's `exp`, or from the token's
+    /// own payload when the server doesn't echo it.
+    static func jwtExpiry(responseExp: Any?, token: String) -> Date? {
+        if let exp = (responseExp as? NSNumber)?.doubleValue, exp > 0 {
+            return Date(timeIntervalSince1970: exp)
+        }
+        let segments = token.split(separator: ".")
+        guard segments.count >= 2 else { return nil }
+        var payload = String(segments[1]).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+        payload += String(repeating: "=", count: (4 - payload.count % 4) % 4)
+        guard let data = Data(base64Encoded: payload),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let exp = (json["exp"] as? NSNumber)?.doubleValue, exp > 0 else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: exp)
     }
 
     private func completeJWT(key: String, result: Result<String, Error>) {
@@ -485,9 +565,13 @@ final class NightscoutAPIClient {
         completions.forEach { $0(result) }
     }
 
-    private func invalidateJWT(baseURL: URL, accessToken: String) {
+    private func invalidateJWT(baseURL: URL, accessToken: String, rejected: String) {
+        let key = credentialKey(baseURL: baseURL, accessToken: accessToken)
         lock.lock()
-        jwtByCredential.removeValue(forKey: credentialKey(baseURL: baseURL, accessToken: accessToken))
+        // A concurrent refresh may already have replaced the rejected token.
+        if jwtByCredential[key]?.token == rejected {
+            jwtByCredential.removeValue(forKey: key)
+        }
         lock.unlock()
     }
 

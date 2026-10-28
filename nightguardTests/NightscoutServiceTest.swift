@@ -507,6 +507,178 @@ class NightscoutServiceTest: XCTestCase {
         XCTAssertFalse(requestedPaths.contains("/api/v1/entries.json"))
     }
 
+    func testCachedJWTIsReusedAndRefreshedInBackgroundBeforeExpiry() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://jwt-refresh.example.org", token: "care-secret")
+        defer { restoreCredentials() }
+
+        var clock = Date(timeIntervalSince1970: 1_000_000)
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration), now: { clock })
+        let lock = NSLock()
+        var jwtRequests = 0
+        var bearers: [String] = []
+        var authEndpointFailing = false
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/api/v3/version" {
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{}".utf8))
+            }
+            if url.path == "/api/v2/authorization/request/token=care-secret" {
+                lock.lock(); jwtRequests += 1; let n = jwtRequests; let failing = authEndpointFailing; lock.unlock()
+                if failing {
+                    return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)), Data())
+                }
+                let exp = Int(clock.timeIntervalSince1970) + 3600
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{\"token\":\"jwt-\(n)\",\"exp\":\(exp)}".utf8))
+            }
+            XCTAssertEqual(url.path, "/api/v3/entries")
+            lock.lock(); bearers.append(request.value(forHTTPHeaderField: "Authorization") ?? ""); lock.unlock()
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("[]".utf8))
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        func read() {
+            let done = expectation(description: "read")
+            _ = client.requestV3(path: "api/v3/entries", legacy: nil, allowLegacyFallback: false) { result in
+                if case .failure(let error) = result { XCTFail("Unexpected failure \(error)") }
+                done.fulfill()
+            }
+            waitForExpectations(timeout: 2)
+        }
+
+        read()
+        clock = clock.addingTimeInterval(30 * 60)
+        read()
+        XCTAssertEqual(jwtRequests, 1, "a valid token must be reused")
+
+        // Inside the refresh window with a failing auth endpoint: the current
+        // token keeps being served and the read still succeeds.
+        authEndpointFailing = true
+        clock = clock.addingTimeInterval(20 * 60)
+        read()
+        let refreshAttempted = expectation(description: "background refresh attempted")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { refreshAttempted.fulfill() }
+        waitForExpectations(timeout: 2)
+        read()
+
+        // Auth endpoint recovers: the next read in the window refreshes in
+        // the background and later reads use the new token.
+        authEndpointFailing = false
+        read()
+        let refreshed = expectation(description: "background refresh finished")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { refreshed.fulfill() }
+        waitForExpectations(timeout: 2)
+        read()
+
+        XCTAssertEqual(bearers.prefix(5).allSatisfy { $0 == "Bearer jwt-1" }, true)
+        XCTAssertNotEqual(bearers.last, "Bearer jwt-1")
+        XCTAssertGreaterThanOrEqual(jwtRequests, 3)
+    }
+
+    func testConcurrentReadsShareOneJWTRequest() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://jwt-single-flight.example.org", token: "care-secret")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        let lock = NSLock()
+        var jwtRequests = 0
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/api/v2/authorization/request/token=care-secret" {
+                lock.lock(); jwtRequests += 1; lock.unlock()
+                Thread.sleep(forTimeInterval: 0.2)
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{\"token\":\"shared-jwt\"}".utf8))
+            }
+            if url.path == "/api/v3/entries" {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer shared-jwt")
+            }
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{}".utf8))
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        // Prime the v3 capability cache so the reads race on the JWT only.
+        let primed = expectation(description: "primed")
+        _ = client.requestV3(path: "api/v3/entries", legacy: nil, allowLegacyFallback: false) { _ in primed.fulfill() }
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(jwtRequests, 1)
+
+        let restoreSecond = useTemporaryCredentials(url: "https://jwt-single-flight.example.org", token: "other-secret")
+        defer { restoreSecond() }
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            if url.path == "/api/v2/authorization/request/token=other-secret" {
+                lock.lock(); jwtRequests += 1; lock.unlock()
+                Thread.sleep(forTimeInterval: 0.2)
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{\"token\":\"shared-jwt\"}".utf8))
+            }
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{}".utf8))
+        }
+        for index in 0..<4 {
+            let done = expectation(description: "read \(index)")
+            _ = client.requestV3(path: "api/v3/entries", legacy: nil, allowLegacyFallback: false) { result in
+                if case .failure(let error) = result { XCTFail("Unexpected failure \(error)") }
+                done.fulfill()
+            }
+        }
+        waitForExpectations(timeout: 3)
+        XCTAssertEqual(jwtRequests, 2, "four concurrent reads must trigger a single JWT request")
+    }
+
+    func testFallsBackToV1WhenJWTCannotBeObtained() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://jwt-down.example.org", token: "care-secret")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        var requestedPaths: [String] = []
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            requestedPaths.append(url.path)
+            if url.path == "/api/v3/version" {
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("{}".utf8))
+            }
+            if url.path == "/api/v2/authorization/request/token=care-secret" {
+                return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 500, httpVersion: nil, headerFields: nil)), Data())
+            }
+            XCTAssertEqual(url.path, "/api/v1/entries.json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "API-SECRET"), "care-secret")
+            return (try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)), Data("[{\"sgv\":61}]".utf8))
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        let done = expectation(description: "v1 fallback after JWT failure")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"]),
+            legacyUseAccessTokenHeader: true
+        ) { result in
+            guard case .success(let response) = result else {
+                XCTFail("Expected v1 data while the auth endpoint is failing")
+                done.fulfill()
+                return
+            }
+            XCTAssertEqual(String(data: response.0, encoding: .utf8), "[{\"sgv\":61}]")
+            done.fulfill()
+        }
+        waitForExpectations(timeout: 2)
+        XCTAssertEqual(requestedPaths, ["/api/v3/version", "/api/v2/authorization/request/token=care-secret", "/api/v1/entries.json"])
+    }
+
+    func testJWTExpiryIsReadFromResponseOrTokenPayload() {
+        XCTAssertEqual(NightscoutAPIClient.jwtExpiry(responseExp: NSNumber(value: 1_700_000_000), token: "x"),
+                       Date(timeIntervalSince1970: 1_700_000_000))
+        // {"accessToken":"a","exp":1700003600}
+        let payload = Data("{\"accessToken\":\"a\",\"exp\":1700003600}".utf8).base64EncodedString()
+            .replacingOccurrences(of: "=", with: "").replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
+        XCTAssertEqual(NightscoutAPIClient.jwtExpiry(responseExp: nil, token: "h.\(payload).s"),
+                       Date(timeIntervalSince1970: 1_700_003_600))
+        XCTAssertNil(NightscoutAPIClient.jwtExpiry(responseExp: nil, token: "opaque"))
+    }
+
     private func useTemporaryCredentials(url: String, token: String) -> () -> Void {
         let originalURL = UserDefaultsRepository.baseUri.value
         let temporaryURL = URL(string: url)!
