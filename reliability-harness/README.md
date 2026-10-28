@@ -50,7 +50,12 @@ have separate databases. It generates synthetic API secrets, sets
 `AUTH_DEFAULT_ROLES=denied`, `DISPLAY_UNITS=mg/dl`, `INSECURE_USE_HTTP=true`,
 and enables the `careportal` plugin. It creates a synthetic `readable`
 authorization subject per slot and verifies v3 version, v3 entries, and v1
-entries on both replicas before measuring.
+entries on both replicas before measuring. Authorization subjects are cached in
+memory at Nightscout startup: the runner creates each synthetic subject on
+replica A, restarts replica B to load the shared subject, then checks both.
+Service PID, port, command, and checkout metadata is kept under `.state/`; a
+later run stops only matching harness-owned listeners before starting new
+services. An occupied untracked MongoDB port is refused.
 
 ## Session shape and runs
 

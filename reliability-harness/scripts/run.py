@@ -9,6 +9,7 @@ import os
 import plistlib
 import re
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -24,6 +25,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 HARNESS = ROOT / "reliability-harness"
 STATE = HARNESS / ".state"
+PROCESS_STATE = STATE / "processes"
 NODE20_BIN = Path(os.environ.get("NODE20_BIN", "/opt/homebrew/opt/node@20/bin"))
 NODE = NODE20_BIN / "node"
 MONGOD = Path(os.environ.get("MONGOD_BIN", "/opt/homebrew/opt/mongodb-community/bin/mongod"))
@@ -37,12 +39,31 @@ def reserve_port():
         return listener.getsockname()[1]
 
 
+def ensure_port_free(port):
+    with socket.socket() as listener:
+        try:
+            listener.bind(("127.0.0.1", port))
+        except OSError as error:
+            raise RuntimeError(f"Port {port} is already in use") from error
+
+
 def node_environment(extra=None):
     environment = os.environ.copy()
     environment["PATH"] = f"{NODE20_BIN}:{environment.get('PATH', '')}"
     if extra:
         environment.update(extra)
     return environment
+
+
+def jwt_key_signature(nightscout):
+    key_file = nightscout / "node_modules/.cache/_ns_cache/randomString"
+    try:
+        stat = key_file.stat()
+    except OSError as error:
+        raise RuntimeError(f"Nightscout JWT signing key is missing: {key_file}") from error
+    if not key_file.read_text(encoding="utf-8").strip():
+        raise RuntimeError(f"Nightscout JWT signing key is empty: {key_file}")
+    return (stat.st_ino, stat.st_mtime_ns, stat.st_size)
 
 
 def command_output(command, cwd=None, env=None, timeout=30):
@@ -111,16 +132,20 @@ def ensure_nightscout(log_dir):
             f"Expected cgm-remote-monitor at {tag} ({pinned_commit}), "
             f"found commit {current_commit}"
         )
-    npm_log = log_dir / "npm-ci.log"
-    returncode = run_logged(
-        [NODE20_BIN / "npm", "ci"],
-        npm_log,
-        cwd=nightscout,
-        env=node_environment(),
-        timeout=900,
-    )
-    if returncode:
-        raise RuntimeError(f"npm ci failed; see {npm_log}\n{tail(npm_log)}")
+    key_file = nightscout / "node_modules/.cache/_ns_cache/randomString"
+    if not (nightscout / "node_modules").is_dir() or not key_file.is_file():
+        npm_log = log_dir / "npm-ci.log"
+        returncode = run_logged(
+            [NODE20_BIN / "npm", "ci"],
+            npm_log,
+            cwd=nightscout,
+            env=node_environment(),
+            timeout=900,
+        )
+        if returncode:
+            raise RuntimeError(f"npm ci failed; see {npm_log}\n{tail(npm_log)}")
+    if not key_file.is_file() or not key_file.read_text(encoding="utf-8").strip():
+        raise RuntimeError(f"Nightscout JWT signing key is missing: {key_file}")
     return nightscout
 
 
@@ -179,6 +204,82 @@ def spawn_service(command, logfile, cwd=None, env=None, stdout=subprocess.DEVNUL
     return process
 
 
+def track_service(process, port, command, cwd):
+    PROCESS_STATE.mkdir(parents=True, exist_ok=True)
+    manifest = PROCESS_STATE / f"{port}.json"
+    manifest.write_text(
+        json.dumps({
+            "pid": process.pid,
+            "port": port,
+            "command": [str(item) for item in command],
+            "cwd": str(Path(cwd).resolve()) if cwd else str(ROOT),
+        }) + "\n",
+        encoding="utf-8",
+    )
+    process._harness_pid_manifest = manifest
+
+
+def terminate_stale_services():
+    if not PROCESS_STATE.exists():
+        return
+    for manifest in PROCESS_STATE.glob("*.json"):
+        try:
+            details = json.loads(manifest.read_text(encoding="utf-8"))
+            pid = int(details["pid"])
+            port = int(details["port"])
+        except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"Invalid tracked service manifest {manifest}; refusing to start services"
+            ) from error
+        actual_command = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "command="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        ).stdout
+        if not actual_command:
+            manifest.unlink(missing_ok=True)
+            continue
+        actual_files = subprocess.run(
+            ["lsof", "-p", str(pid)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            check=False,
+        ).stdout
+        expected_command = details.get("command")
+        expected_cwd = details.get("cwd")
+        if (
+            not isinstance(expected_command, list)
+            or not isinstance(expected_cwd, str)
+            or not all(str(item) in actual_command for item in expected_command)
+            or expected_cwd not in actual_files
+        ):
+            raise RuntimeError(
+                f"Tracked harness PID {pid} no longer matches port {port}; "
+                "refusing to start services"
+            )
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            manifest.unlink(missing_ok=True)
+            continue
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.2)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        manifest.unlink(missing_ok=True)
+
+
 def terminate_process(process, timeout=8):
     if process is None:
         return
@@ -194,6 +295,9 @@ def terminate_process(process, timeout=8):
         handle.close()
     if process.stdout and not process.stdout.closed:
         process.stdout.close()
+    manifest = getattr(process, "_harness_pid_manifest", None)
+    if manifest:
+        Path(manifest).unlink(missing_ok=True)
 
 
 def start_mongo(log_dir, processes):
@@ -216,6 +320,13 @@ def start_mongo(log_dir, processes):
             "--quiet",
         ],
         log_path,
+        cwd=ROOT,
+    )
+    track_service(
+        process,
+        port,
+        [MONGOD, "--dbpath", mongo_dir, "--bind_ip", "127.0.0.1", "--port", port],
+        ROOT,
     )
     processes.append(process)
     wait_for_tcp(port, process, log_path, seconds=90)
@@ -224,11 +335,16 @@ def start_mongo(log_dir, processes):
 
 def start_nightscout(nightscout, slot_count, mongo_port, api_secret, run_dir, processes):
     services = []
+    service_details = {}
     slots = {}
+    key_signature = jwt_key_signature(nightscout)
     for slot in range(1, slot_count + 1):
         ports = {"A": reserve_port(), "B": reserve_port()}
         slots[str(slot)] = {}
         for replica_name, port in ports.items():
+            ensure_port_free(port)
+            if jwt_key_signature(nightscout) != key_signature:
+                raise RuntimeError("Nightscout JWT signing key changed while starting replicas")
             env = node_environment({
                 "PORT": str(port),
                 "MONGODB_URI": f"mongodb://127.0.0.1:{mongo_port}/ns_slot_{slot}",
@@ -246,25 +362,59 @@ def start_nightscout(nightscout, slot_count, mongo_port, api_secret, run_dir, pr
                 cwd=nightscout,
                 env=env,
             )
+            track_service(process, port, [NODE, "lib/server/server.js"], nightscout)
             services.append(process)
             processes.append(process)
             wait_for_nightscout(port, process, logfile)
+            if jwt_key_signature(nightscout) != key_signature:
+                raise RuntimeError("Nightscout JWT signing key changed while starting replicas")
             slots[str(slot)][replica_name] = {"port": port}
-    return services, slots
+            service_details[(slot, replica_name)] = {
+                "port": port,
+                "logfile": logfile,
+                "process": process,
+                "env": env,
+                "keySignature": key_signature,
+            }
+    return services, slots, service_details
 
 
-def create_subjects(slots, api_secret, run_dir):
+def restart_secondary_replica(slot, nightscout, service_details, processes):
+    details = service_details[(int(slot), "B")]
+    if jwt_key_signature(nightscout) != details["keySignature"]:
+        raise RuntimeError("Nightscout JWT signing key changed before replica restart")
+    terminate_process(details["process"])
+    process = spawn_service(
+        [NODE, "lib/server/server.js"],
+        details["logfile"],
+        cwd=nightscout,
+        env=details["env"],
+    )
+    track_service(
+        process,
+        details["port"],
+        [NODE, "lib/server/server.js"],
+        nightscout,
+    )
+    processes.append(process)
+    wait_for_nightscout(details["port"], process, details["logfile"])
+    if jwt_key_signature(nightscout) != details["keySignature"]:
+        raise RuntimeError("Nightscout JWT signing key changed during replica restart")
+    details["process"] = process
+
+
+def create_subjects(slots, api_secret, run_dir, nightscout, service_details, processes):
     subject_data = {}
     for slot, replicas in slots.items():
-        try:
-            output = command_output(
+        def run_admin(port_b):
+            return command_output(
                 [
                     NODE,
                     HARNESS / "scripts" / "nightscout-admin.js",
                     "--portA",
                     replicas["A"]["port"],
                     "--portB",
-                    replicas["B"]["port"],
+                    port_b,
                     "--subject",
                     f"synthetic-slot-{slot}",
                 ],
@@ -272,11 +422,21 @@ def create_subjects(slots, api_secret, run_dir):
                 env=node_environment({"HARNESS_API_SECRET": api_secret}),
                 timeout=60,
             )
+
+        try:
+            run_admin(replicas["A"]["port"])
         except subprocess.CalledProcessError as error:
             raise RuntimeError(
                 f"Nightscout verification failed for synthetic slot {slot}: "
                 f"{error.stdout.strip()}"
             ) from error
+        restart_secondary_replica(
+            slot,
+            nightscout,
+            service_details,
+            processes,
+        )
+        output = run_admin(replicas["B"]["port"])
         result = json.loads(output.splitlines()[-1])
         state_path = STATE / "slots" / f"slot-{slot}-token.json"
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -547,6 +707,12 @@ def start_gateway(slots, gateway_log):
     ready = json.loads(ready_line)
     if ready.get("status") != "ready":
         raise RuntimeError(f"Unexpected gateway startup response: {ready_line}")
+    track_service(
+        server,
+        int(ready["port"]),
+        [NODE, HARNESS / "gateway" / "gateway.js"],
+        ROOT,
+    )
     return server, ready["port"]
 
 
@@ -913,11 +1079,12 @@ def main():
     processes = []
     simulators = []
     try:
+        terminate_stale_services()
         require_tools()
         nightscout = ensure_nightscout(run_dir / "services")
         mongo_process, args.mongo_port = start_mongo(run_dir / "services", processes)
         api_secret = secrets.token_urlsafe(36)
-        nightscout_services, slots = start_nightscout(
+        nightscout_services, slots, service_details = start_nightscout(
             nightscout,
             workers,
             args.mongo_port,
@@ -925,7 +1092,14 @@ def main():
             run_dir,
             processes,
         )
-        tokens = create_subjects(slots, api_secret, run_dir)
+        tokens = create_subjects(
+            slots,
+            api_secret,
+            run_dir,
+            nightscout,
+            service_details,
+            processes,
+        )
         gateway_log = run_dir / "gateway.jsonl"
         gateway_process, gateway_port = start_gateway(slots, gateway_log)
         processes.append(gateway_process)
