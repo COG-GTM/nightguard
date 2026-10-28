@@ -557,8 +557,21 @@ def persistent_simulator_devices(device_listing):
     }
 
 
+def simulator_runtime_id(device_listing, simulator_id):
+    return next(
+        (
+            runtime_id
+            for runtime_id, runtime_devices in device_listing["devices"].items()
+            for device in runtime_devices
+            if device.get("udid") == simulator_id
+        ),
+        None,
+    )
+
+
 def create_simulators(count, run_dir):
     source_id, runtime = simulator_source()
+    runtime_id = f"com.apple.CoreSimulator.SimRuntime.{runtime}"
     device_listing = json.loads(
         command_output(["xcrun", "simctl", "list", "devices", "-j"])
     )
@@ -568,24 +581,32 @@ def create_simulators(count, run_dir):
     for index in range(count):
         name = f"Nightguard Reliability slot {index + 1}"
         existing = named_devices.get(name)
+        recreated = False
         if existing:
-            if not existing.get("isAvailable", False):
-                raise RuntimeError(f"Persistent simulator {name} is unavailable")
-            simulators.append(existing["udid"])
-            methods.append("reused")
-            continue
+            recreated = (
+                not existing.get("isAvailable", False)
+                or simulator_runtime_id(device_listing, existing.get("udid"))
+                != runtime_id
+            )
+            if not recreated:
+                simulators.append(existing["udid"])
+                methods.append("reused")
+                continue
+            command_output(
+                ["xcrun", "simctl", "delete", existing["udid"]],
+                timeout=120,
+            )
         try:
             output = command_output(["xcrun", "simctl", "clone", source_id, name], timeout=120)
-            methods.append("clone")
+            methods.append("recreated" if recreated else "clone")
         except subprocess.CalledProcessError as clone_error:
             device_type = "com.apple.CoreSimulator.SimDeviceType.iPhone-17"
-            runtime_id = f"com.apple.CoreSimulator.SimRuntime.{runtime}"
             try:
                 output = command_output(
                     ["xcrun", "simctl", "create", name, device_type, runtime_id],
                     timeout=120,
                 )
-                methods.append("create-fallback")
+                methods.append("recreated" if recreated else "create-fallback")
             except subprocess.CalledProcessError as create_error:
                 raise RuntimeError(
                     "Simulator clone and clean-device creation both failed. "
@@ -762,9 +783,49 @@ def cached_xctestrun(derived_data):
         metadata = json.loads(manifest.read_text(encoding="utf-8"))
         xctestrun = (derived_data / metadata["xctestrun"]).resolve()
         xctestrun.relative_to(derived_data.resolve())
-    except (OSError, KeyError, TypeError, ValueError):
+        with xctestrun.open("rb") as source:
+            document = plistlib.load(source)
+    except (OSError, KeyError, TypeError, ValueError, plistlib.InvalidFileException):
         return None
-    return xctestrun if xctestrun.is_file() else None
+    if not xctestrun.is_file() or not isinstance(document, dict):
+        return None
+    products = xctestrun.parent / "Debug-iphonesimulator"
+    product_names = ("nightguard.app", "nightguardUITests-Runner.app")
+    if not all((products / name).is_dir() for name in product_names):
+        return None
+    targets = []
+    configurations = document.get("TestConfigurations", [])
+    if isinstance(configurations, list):
+        for configuration in configurations:
+            if isinstance(configuration, dict):
+                test_targets = configuration.get("TestTargets", [])
+                if isinstance(test_targets, list):
+                    targets.extend(
+                        target for target in test_targets if isinstance(target, dict)
+                    )
+    if not targets:
+        targets = [
+            target
+            for name, target in document.items()
+            if name != "__xctestrun_metadata__" and isinstance(target, dict)
+        ]
+    for target in targets:
+        host_path = target.get("TestHostPath")
+        product_paths = [
+            value
+            for name, value in target.items()
+            if name.endswith("Path") and isinstance(value, str)
+        ]
+        if (
+            isinstance(host_path, str)
+            and any(name in host_path for name in product_names)
+            and all(
+                any(name in value for value in product_paths)
+                for name in product_names
+            )
+        ):
+            return xctestrun
+    return None
 
 
 def record_xctestrun(derived_data, xctestrun):
