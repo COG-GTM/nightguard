@@ -37,17 +37,25 @@ reliability-harness/scripts/setup-nightscout.sh
 The script installs `nightscout/cgm-remote-monitor` tag `v15.0.9` in
 `.state/`, verifies the exact tag commit, and runs `npm ci` with Node 20.
 The first `run.sh` invocation automatically performs `xcodebuild
-build-for-testing`, creates iPhone 17 simulator clones (falling back to clean
-devices when cloning is unavailable), starts services, and runs the UI test.
-Clones are cold-booted serially with load-average waits between boots, retained
-booted for the run, and reused across session waves. Per-session cleanup
-uninstalls the app and clears its app-group state without rebooting the clone.
+build-for-testing` when no matching cached build exists, reuses persistent
+iPhone 17 clones named `Nightguard Reliability slot <n>` (creating a slot only
+when missing), starts services, and runs the UI test. Clones are cold-booted
+serially with load-average waits between boots, retained booted for the run,
+and reused across session waves. Per-session cleanup uninstalls the app and
+clears its app-group state without rebooting the clone; all clones are shut
+down at run end.
 Before launching each UI test, the runner waits for the 1-minute load average
 to drop below three times the logical CPU count, for up to 120 seconds. On the
 reference host, clean-checkout setup
 from clone through first UI-test launch took about **2.1 minutes**. The
 Homebrew MongoDB tap and the Node 20.20.2 and MongoDB Community 9.0.4 installs
 were already present on that host and were skipped during that measurement.
+
+Allow at least **20 GB free** on the volume containing
+`~/Library/Developer` before starting a run. A full run needs about **3 GB**
+for derived data plus **2–4 GB per booted simulator clone**. Derived data is
+cached by app commit and local overlay and the two most recently used keys are
+kept.
 
 The runner starts one local MongoDB process and two real Nightscout replicas
 per simulator slot. Slot replicas share `ns_slot_<slot>`; different slots
@@ -137,8 +145,8 @@ The runner builds the requested app ref in a detached Git worktree with
 hook; refs that do not are rejected rather than overlaid. Uncommitted local
 changes are still copied into the build worktree. The runner recommends no
 more workers than it has measured.
-`--keep-services-running` leaves the local services and simulator devices
-running after the run.
+`--keep-services-running` leaves the local services running after the run;
+simulator clones are shut down but retained for reuse.
 
 Run output is written to `results/<label>-<timestamp>/`:
 

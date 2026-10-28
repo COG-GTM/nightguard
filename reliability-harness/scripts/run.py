@@ -33,6 +33,7 @@ APP_BUNDLE_ID = "de.my-wan.dhe.nightguard"
 TEST_NAME = "nightguardUITests/AlarmReliabilityUITests/testAlarmSession"
 TOKEN_ASSIGNMENT = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
 XCODE_TEST_LAUNCH_LOCK = threading.Lock()
+MIN_DEVELOPER_FREE_SPACE_BYTES = 20 * 1024 ** 3
 
 
 def reserve_port():
@@ -55,6 +56,21 @@ def node_environment(extra=None):
     if extra:
         environment.update(extra)
     return environment
+
+
+def require_simulator_disk_space():
+    developer_dir = Path.home() / "Library" / "Developer"
+    volume_path = developer_dir
+    while not volume_path.exists():
+        volume_path = volume_path.parent
+    free_bytes = shutil.disk_usage(volume_path).free
+    if free_bytes < MIN_DEVELOPER_FREE_SPACE_BYTES:
+        free_gib = free_bytes / (1024 ** 3)
+        raise RuntimeError(
+            f"Insufficient free space on the volume containing {developer_dir}: "
+            f"{free_gib:.1f} GiB free; at least 20 GiB is required before "
+            "simulator startup."
+        )
 
 
 def jwt_key_signature(nightscout):
@@ -532,12 +548,32 @@ def simulator_source():
     raise RuntimeError("No available iPhone 17 simulator on iOS 26.5 or 27.0")
 
 
-def create_simulators(count, run_id, run_dir):
+def persistent_simulator_devices(device_listing):
+    return {
+        device.get("name"): device
+        for runtime_devices in device_listing["devices"].values()
+        for device in runtime_devices
+        if device.get("name", "").startswith("Nightguard Reliability slot ")
+    }
+
+
+def create_simulators(count, run_dir):
     source_id, runtime = simulator_source()
+    device_listing = json.loads(
+        command_output(["xcrun", "simctl", "list", "devices", "-j"])
+    )
+    named_devices = persistent_simulator_devices(device_listing)
     simulators = []
     methods = []
     for index in range(count):
-        name = f"Nightguard Reliability {run_id} {index + 1}"
+        name = f"Nightguard Reliability slot {index + 1}"
+        existing = named_devices.get(name)
+        if existing:
+            if not existing.get("isAvailable", False):
+                raise RuntimeError(f"Persistent simulator {name} is unavailable")
+            simulators.append(existing["udid"])
+            methods.append("reused")
+            continue
         try:
             output = command_output(["xcrun", "simctl", "clone", source_id, name], timeout=120)
             methods.append("clone")
@@ -559,7 +595,13 @@ def create_simulators(count, run_id, run_dir):
         match = re.search(r"[0-9A-Fa-f-]{36}", output)
         if not match:
             raise RuntimeError(f"Could not parse cloned simulator UDID from: {output}")
-        simulators.append(match.group(0))
+        simulator_id = match.group(0)
+        simulators.append(simulator_id)
+        named_devices[name] = {
+            "name": name,
+            "udid": simulator_id,
+            "isAvailable": True,
+        }
     (run_dir / "simulators.json").write_text(
         json.dumps({
             "source": source_id,
@@ -714,6 +756,52 @@ def prepare_build_worktree(app_ref, worktree, source_root):
     return worktree
 
 
+def cached_xctestrun(derived_data):
+    manifest = derived_data / "harness-build.json"
+    try:
+        metadata = json.loads(manifest.read_text(encoding="utf-8"))
+        xctestrun = (derived_data / metadata["xctestrun"]).resolve()
+        xctestrun.relative_to(derived_data.resolve())
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    return xctestrun if xctestrun.is_file() else None
+
+
+def record_xctestrun(derived_data, xctestrun):
+    manifest = derived_data / "harness-build.json"
+    manifest.write_text(
+        json.dumps({"xctestrun": str(xctestrun.relative_to(derived_data))}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.utime(manifest, None)
+
+
+def prune_derived_data(derived_data_root, active_key):
+    if not derived_data_root.is_dir():
+        return
+    directories = [
+        path for path in derived_data_root.iterdir()
+        if path.is_dir() and not path.is_symlink()
+    ]
+    most_recent = sorted(
+        directories,
+        key=lambda path: (path / "harness-build.json").stat().st_mtime
+        if (path / "harness-build.json").is_file()
+        else path.stat().st_mtime,
+        reverse=True,
+    )
+    retained = {active_key.resolve()}
+    for path in most_recent:
+        resolved_path = path.resolve()
+        if resolved_path != active_key.resolve():
+            retained.add(resolved_path)
+            if len(retained) == 2:
+                break
+    for path in directories:
+        if path.resolve() not in retained:
+            shutil.rmtree(path)
+
+
 def build_for_testing(worktree, source_id, derived_data, log_path):
     result = run_logged(
         [
@@ -738,7 +826,9 @@ def build_for_testing(worktree, source_id, derived_data, log_path):
     candidates = sorted(derived_data.rglob("*.xctestrun"), key=lambda item: item.stat().st_mtime)
     if not candidates:
         raise RuntimeError(f"No .xctestrun file found under {derived_data}")
-    return candidates[-1]
+    xctestrun = candidates[-1]
+    record_xctestrun(derived_data, xctestrun)
+    return xctestrun
 
 
 def configure_test_run(source_xctestrun, session_config, xctestrun_path):
@@ -1200,6 +1290,23 @@ def parse_args():
 def main():
     args = parse_args()
     require_tools()
+    app_commit = command_output([
+        "git", "-C", ROOT, "rev-parse", f"{args.app_ref}^{{commit}}"
+    ]).strip()
+    overlay = subprocess.run(
+        ["git", "diff", "--binary", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout
+    overlay_hash = hashlib.sha256(overlay).hexdigest() if overlay else None
+    derived_data_key = app_commit + (
+        f"-dirty-{overlay_hash}" if overlay_hash else ""
+    )
+    derived_data_root = STATE / "derived-data"
+    derived_data = derived_data_root / derived_data_key
+    prune_derived_data(derived_data_root, derived_data)
+    require_simulator_disk_space()
     STATE.mkdir(parents=True, exist_ok=True)
     now = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     run_id = f"{args.label}-{now}-{time.time_ns() % 1_000_000:06d}"
@@ -1215,9 +1322,6 @@ def main():
         profile = json.loads(profile_path.resolve().read_text(encoding="utf-8"))
     profile_seed = profile.get("run_seed", 135) if profile else 135
     run_seed = args.seed if args.seed is not None else profile_seed
-    app_commit = command_output([
-        "git", "-C", ROOT, "rev-parse", f"{args.app_ref}^{{commit}}"
-    ]).strip()
     shape_fingerprint = hashlib.sha256(
         json.dumps(shape, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -1244,9 +1348,8 @@ def main():
     simulators = []
     try:
         terminate_stale_services()
-        require_tools()
         logical_cpus = int(command_output(["sysctl", "-n", "hw.logicalcpu"]).strip())
-        source_id, simulator_clones, runtime = create_simulators(workers, run_id, run_dir)
+        source_id, simulator_clones, runtime = create_simulators(workers, run_dir)
         simulators = simulator_clones
         simulators, simulator_boots = boot_simulators(simulators, run_dir, logical_cpus)
         workers = len(simulators)
@@ -1277,13 +1380,19 @@ def main():
         worktree = STATE / "worktrees" / f"{run_id}-build"
         worktree.parent.mkdir(parents=True, exist_ok=True)
         prepare_build_worktree(args.app_ref, worktree, ROOT)
-        derived_data = STATE / "derived-data" / run_id
-        xctestrun = build_for_testing(
-            worktree,
-            source_id,
-            derived_data,
-            run_dir / "services" / "xcodebuild-build.log",
-        )
+        xctestrun = cached_xctestrun(derived_data)
+        derived_data_reused = xctestrun is not None
+        if derived_data_reused:
+            os.utime(derived_data / "harness-build.json", None)
+            print(f"Reusing derived data for {derived_data_key}", flush=True)
+        else:
+            xctestrun = build_for_testing(
+                worktree,
+                source_id,
+                derived_data,
+                run_dir / "services" / "xcodebuild-build.log",
+            )
+        prune_derived_data(derived_data_root, derived_data)
 
         measurement = {
             "requestedWorkers": requested_workers,
@@ -1316,6 +1425,8 @@ def main():
                 "slots": slots,
                 "simulators": simulators,
                 "simulatorBoots": simulator_boots,
+                "derivedDataKey": derived_data_key,
+                "derivedDataReused": derived_data_reused,
                 "xctestrun": str(xctestrun),
             }, indent=2) + "\n",
             encoding="utf-8",
@@ -1421,19 +1532,19 @@ def main():
         return 0
     finally:
         redact_result_artifacts(run_dir)
+        for simulator_id in simulators:
+            subprocess.run(
+                ["xcrun", "simctl", "shutdown", simulator_id],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=60,
+            )
         if not args.keep_services_running:
-            for simulator_id in simulators:
-                subprocess.run(
-                    ["xcrun", "simctl", "shutdown", simulator_id],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    check=False,
-                    timeout=60,
-                )
             for process in reversed(processes):
                 terminate_process(process)
         else:
-            print(f"Services and simulators left running for {run_dir}")
+            print(f"Services left running for {run_dir}; simulators are shut down")
 
 
 if __name__ == "__main__":
