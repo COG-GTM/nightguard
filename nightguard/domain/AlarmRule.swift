@@ -429,25 +429,22 @@ class AlarmRule {
     }
 
     private static func noDataActivation(for nightscoutData: NightscoutData) -> AlarmActivation? {
-        let thresholdMinutes = resolvedMinutesWithoutValues()
-        logNoDataEvaluationSource(ageMinutes: Int(Date().timeIntervalSince(Date(timeIntervalSince1970: nightscoutData.time.doubleValue / 1000)) / 60), thresholdMinutes: thresholdMinutes)
-
-        guard nightscoutData.isOlderThanXMinutes(thresholdMinutes) else {
-            return nil
-        }
-
-        guard resolvedNoDataAlarmEnabled() else {
-            return nil
-        }
-
-        return AlarmActivation(kind: .missedReadings, message: NSLocalizedString("Missed Readings", comment: "noDataAlarmEnabled.value in AlarmRule Class"))
+        noDataActivation(readingMillis: nightscoutData.time.doubleValue)
     }
 
     private static func noDataActivation(for reading: BloodSugar) -> AlarmActivation? {
-        let thresholdMinutes = resolvedMinutesWithoutValues()
-        logNoDataEvaluationSource(ageMinutes: Int(Date().timeIntervalSince(reading.date) / 60), thresholdMinutes: thresholdMinutes)
+        noDataActivation(readingMillis: reading.timestamp)
+    }
 
-        guard reading.isOlderThanXMinutes(thresholdMinutes) else {
+    /// Missed Readings is about the newest reading the app knows of, not the one that
+    /// happened to be passed in (which can be an older value from a stale/duplicate response).
+    static func noDataActivation(readingMillis: Double, now: Date = Date()) -> AlarmActivation? {
+        let newestMillis = max(readingMillis, NightscoutCacheService.singleton.newestKnownReadingMillis())
+        let ageSeconds = Int(now.timeIntervalSince(Date(timeIntervalSince1970: newestMillis / 1000)))
+        let thresholdMinutes = resolvedMinutesWithoutValues()
+        logNoDataEvaluationSource(ageMinutes: ageSeconds / 60, thresholdMinutes: thresholdMinutes)
+
+        guard ageSeconds > thresholdMinutes * 60 else {
             return nil
         }
 
@@ -457,6 +454,7 @@ class AlarmRule {
 
         return AlarmActivation(kind: .missedReadings, message: NSLocalizedString("Missed Readings", comment: "noDataAlarmEnabled.value in AlarmRule Class"))
     }
+
 
     private static func refreshProtectedDataSafeAlarmCaches() {
         if let storedValue = rawAlarmSetting(forKey: noDataAlarmEnabled.key, as: Bool.self) {

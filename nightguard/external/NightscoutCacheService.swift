@@ -70,14 +70,33 @@ class NightscoutCacheService: NSObject {
     }
 
     // During background updates, this value is modified from the ExtensionDelegate
-    func updateCurrentNightscoutData(newNightscoutData : NightscoutData) {
+    /// Returns the reading that is current after the update (the existing one if the new one is older).
+    @discardableResult
+    func updateCurrentNightscoutData(newNightscoutData : NightscoutData) -> NightscoutData {
         
         // synchronize here to prevent concurrent modifications when doing background
         // upates
         serialQueue.sync {
+            guard !NightscoutCacheService.isOlder(newNightscoutData, than: currentNightscoutData) else {
+                return currentNightscoutData
+            }
             currentNightscoutData = newNightscoutData
             NightscoutDataRepository.singleton.storeCurrentNightscoutData(newNightscoutData)
+            return newNightscoutData
         }
+    }
+
+    /// A stale or duplicate response must never replace a newer reading we already have.
+    static func isOlder(_ candidate: NightscoutData, than existing: NightscoutData) -> Bool {
+        candidate.time.doubleValue < existing.time.doubleValue
+    }
+
+    /// Timestamp (ms) of the newest reading known to the app, from any source.
+    func newestKnownReadingMillis() -> Double {
+        let cached = serialQueue.sync { () -> Double in
+            max(currentNightscoutData.time.doubleValue, todaysBgData.last?.timestamp ?? 0)
+        }
+        return max(cached, NightscoutEntriesStream.shared.newestGlucoseMillis())
     }
     
     func resetCache() {
@@ -206,7 +225,10 @@ class NightscoutCacheService: NSObject {
     func loadCurrentNightscoutData(forceRefresh: Bool, _ resultHandler : @escaping (NightscoutRequestResult<NightscoutData>?) -> Void) -> NightscoutData {
     
         serialQueue.sync {
-            currentNightscoutData = NightscoutDataRepository.singleton.loadCurrentNightscoutData()
+            let persisted = NightscoutDataRepository.singleton.loadCurrentNightscoutData()
+            if !NightscoutCacheService.isOlder(persisted, than: currentNightscoutData) {
+                currentNightscoutData = persisted
+            }
             checkIfRefreshIsNeeded(resultHandler, forceRefresh: forceRefresh)
         }
         
@@ -378,10 +400,17 @@ class NightscoutCacheService: NSObject {
             case .data(let records):
                 NightscoutService.singleton.makeCurrentData(from: records) { currentResult in
                     if case .data(let newNightscoutData) = currentResult {
-                        self.serialQueue.sync {
-                            self.currentNightscoutData = newNightscoutData
+                        let newest = self.serialQueue.sync { () -> NightscoutData in
+                            if !NightscoutCacheService.isOlder(newNightscoutData, than: self.currentNightscoutData) {
+                                self.currentNightscoutData = newNightscoutData
+                            }
+                            return self.currentNightscoutData
                         }
-                        NightscoutDataRepository.singleton.storeCurrentNightscoutData(newNightscoutData)
+                        if newest === newNightscoutData {
+                            NightscoutDataRepository.singleton.storeCurrentNightscoutData(newNightscoutData)
+                        }
+                        resultHandler(.data(newest))
+                        return
                     }
                     resultHandler(currentResult)
                 }
@@ -431,6 +460,13 @@ final class NightscoutEntriesStream {
         queue.sync {
             loadIfNeededLocked()
             return records
+        }
+    }
+
+    func newestGlucoseMillis() -> Double {
+        queue.sync {
+            loadIfNeededLocked()
+            return records.last(where: { $0.sgv != nil })?.dateMillis ?? 0
         }
     }
 
@@ -613,9 +649,7 @@ final class NightscoutEntriesStream {
     }
 
     private func deduplicated(_ values: [NightscoutEntryRecord]) -> [NightscoutEntryRecord] {
-        var byKey: [String: NightscoutEntryRecord] = [:]
-        values.forEach { byKey[$0.storageKey] = $0 }
-        return byKey.values.sorted { $0.dateMillis < $1.dateMillis }
+        NightscoutEntryRecord.deduplicatedByReading(values)
     }
 
     private func prune(_ values: [NightscoutEntryRecord]) -> [NightscoutEntryRecord] {

@@ -1548,9 +1548,7 @@ class NightscoutService {
         enrichWithProperties: Bool = true,
         resultHandler: @escaping (NightscoutRequestResult<NightscoutData>) -> Void
     ) {
-        let glucoseRecords = records
-            .filter { $0.sgv != nil }
-            .sorted { $0.dateMillis < $1.dateMillis }
+        let glucoseRecords = NightscoutEntryRecord.deduplicatedByReading(records.filter { $0.sgv != nil })
 
         guard let latest = glucoseRecords.last,
               let latestValue = latest.sgv,

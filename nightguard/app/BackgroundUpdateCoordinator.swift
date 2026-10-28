@@ -75,10 +75,10 @@ final class BackgroundUpdateCoordinator {
                         let storedHistory = NightscoutDataRepository.singleton.loadTodaysBgData()
                         let historyValues = self.mergeHistory(storedHistory + fetchedHistory, including: nightscoutData)
 
-                        NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: nightscoutData)
+                        let publishedData = NightscoutCacheService.singleton.updateCurrentNightscoutData(newNightscoutData: nightscoutData)
                         NightscoutDataRepository.singleton.storeTodaysBgData(historyValues)
                         let snapshot = NightscoutDataRepository.singleton.storeLatestDisplaySnapshot(
-                            from: nightscoutData,
+                            from: publishedData,
                             previousValues: historyValues
                         )
                         let hasNewData = nightscoutData.time.doubleValue > previousTimestamp
