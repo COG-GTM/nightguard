@@ -667,7 +667,7 @@ class NightscoutServiceTest: XCTestCase {
 
     func testStalledRefreshThresholdCoversWholeRequestChain() {
         let timeouts = NightscoutRequestTimeouts(handshake: 5, read: 8, write: 20)
-        XCTAssertEqual(timeouts.entriesRefresh, 26)
+        XCTAssertEqual(timeouts.entriesRefresh, 39)
     }
 
     private func useTemporaryCredentials(url: String, token: String) -> () -> Void {

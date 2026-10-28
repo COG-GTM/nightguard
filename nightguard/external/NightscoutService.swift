@@ -87,9 +87,10 @@ struct NightscoutRequestTimeouts {
     /// Writes (treatments, care data).
     let write: TimeInterval
 
-    /// Longest a healthy entries refresh can take: version check, JWT
-    /// exchange, v3 read and v1 fallback, each up to its own timeout.
-    var entriesRefresh: TimeInterval { 2 * handshake + 2 * read }
+    /// Longest a healthy entries refresh can take, each step up to its own
+    /// timeout: version check, JWT exchange, v3 read, one JWT refresh and v3
+    /// retry after a 401, then the v1 fallback.
+    var entriesRefresh: TimeInterval { 3 * handshake + 3 * read }
 
     #if os(watchOS)
     // A watchOS widget extension often has to wake its radio before the
