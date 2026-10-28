@@ -127,6 +127,7 @@ final class NightscoutAPIClient {
 
         let trackedTask = NightscoutRequestTask()
         if method.uppercased() == "GET",
+           fallbackOnTransportFailure,
            allowLegacyFallback,
            legacy != nil,
            isInLegacyCooldown(key) {
@@ -146,6 +147,7 @@ final class NightscoutAPIClient {
             baseURL: baseURL,
             trackedTask: trackedTask,
             allowTransportFallback: method.uppercased() == "GET" && fallbackOnTransportFailure,
+            canUseLegacy: allowLegacyFallback && legacy != nil,
             timeout: effectiveReadTimeout
         ) { result in
             switch result {
@@ -213,6 +215,7 @@ final class NightscoutAPIClient {
         baseURL: URL,
         trackedTask: NightscoutRequestTask,
         allowTransportFallback: Bool,
+        canUseLegacy: Bool,
         timeout: TimeInterval,
         completion: @escaping (Result<Bool, Error>) -> Void
     ) {
@@ -238,7 +241,9 @@ final class NightscoutAPIClient {
             if let error = error {
                 self.logError("V3 capability request failed durationMs=\(duration) \(self.errorSummary(error))")
                 if allowTransportFallback && self.isTransportFailure(error) {
-                    self.enterLegacyCooldown(for: key, reason: self.errorSummary(error))
+                    if canUseLegacy {
+                        self.enterLegacyCooldown(for: key, reason: self.errorSummary(error))
+                    }
                     self.logWarning("Nightscout v3 capability check failed (\(self.errorSummary(error))); trying v1 compatibility mode")
                     completion(.success(false))
                 } else {
@@ -260,7 +265,7 @@ final class NightscoutAPIClient {
                 self.setSupport(.supported, for: key)
                 self.logInfo("V3 capability response HTTP \(http.statusCode) durationMs=\(duration); V3 is supported")
                 completion(.success(true))
-            } else if allowTransportFallback && (500...599).contains(http.statusCode) {
+            } else if allowTransportFallback && canUseLegacy && (500...599).contains(http.statusCode) {
                 self.enterLegacyCooldown(for: key, reason: "HTTP \(http.statusCode)")
                 completion(.success(false))
             } else {

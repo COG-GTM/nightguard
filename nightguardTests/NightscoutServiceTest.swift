@@ -418,6 +418,102 @@ class NightscoutServiceTest: XCTestCase {
         XCTAssertEqual(requestedPaths, ["/api/v3/version", "/api/v3/entries"])
     }
 
+    func testVersionServerErrorDoesNotFallbackWhenLegacyFallbackIsDisabled() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://cooldown-version-disabled-503.example.org", token: "")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        var requestedPaths: [String] = []
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            requestedPaths.append(url.path)
+            return (
+                try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 503, httpVersion: nil, headerFields: nil)),
+                Data()
+            )
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        let requestCompleted = expectation(description: "v3 version 503 returned without fallback")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"]),
+            allowLegacyFallback: false
+        ) { result in
+            guard case .failure(let error as NightscoutHTTPError) = result else {
+                XCTFail("Expected the v3 version HTTP 503 error")
+                requestCompleted.fulfill()
+                return
+            }
+            XCTAssertEqual(error.statusCode, 503)
+            requestCompleted.fulfill()
+        }
+        wait(for: [requestCompleted], timeout: 2)
+
+        XCTAssertEqual(requestedPaths, ["/api/v3/version"])
+    }
+
+    func testDisablingTransportFallbackSkipsActiveLegacyCooldown() throws {
+        let restoreCredentials = useTemporaryCredentials(url: "https://cooldown-policy.example.org", token: "")
+        defer { restoreCredentials() }
+
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NightscoutMockURLProtocol.self]
+        let client = NightscoutAPIClient(session: URLSession(configuration: configuration))
+        var requestedPaths: [String] = []
+        var versionRequestCount = 0
+        NightscoutMockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            requestedPaths.append(url.path)
+            let status: Int
+            if url.path == "/api/v3/version" {
+                versionRequestCount += 1
+                status = versionRequestCount == 1 ? 503 : 200
+            } else {
+                status = 200
+            }
+            return (
+                try XCTUnwrap(HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)),
+                Data("[]".utf8)
+            )
+        }
+        defer { NightscoutMockURLProtocol.handler = nil }
+
+        let fallbackCompleted = expectation(description: "initial v1 cooldown established")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"])
+        ) { result in
+            if case .failure(let error) = result {
+                XCTFail("Expected a successful v1 fallback: \(error)")
+            }
+            fallbackCompleted.fulfill()
+        }
+        wait(for: [fallbackCompleted], timeout: 2)
+
+        let v3RequestCompleted = expectation(description: "v3 request bypassed active cooldown")
+        _ = client.requestV3(
+            path: "api/v3/entries",
+            legacy: NightscoutLegacyEndpoint(path: "api/v1/entries.json", query: ["count": "1"]),
+            fallbackOnTransportFailure: false
+        ) { result in
+            if case .failure(let error) = result {
+                XCTFail("Expected a successful v3 response: \(error)")
+            }
+            v3RequestCompleted.fulfill()
+        }
+        wait(for: [v3RequestCompleted], timeout: 2)
+
+        XCTAssertEqual(requestedPaths, [
+            "/api/v3/version",
+            "/api/v1/entries.json",
+            "/api/v3/version",
+            "/api/v3/entries"
+        ])
+    }
+
     func testFallsBackToV1WhenV3CapabilityCheckTimesOut() throws {
         let restoreCredentials = useTemporaryCredentials(url: "https://timeout.example.org", token: "")
         defer { restoreCredentials() }
