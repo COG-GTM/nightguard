@@ -8,6 +8,78 @@ import XCTest
 
 final class NightscoutCacheServiceTest: XCTestCase {
 
+    func testEntryPollingIsInitiallyDue() {
+        XCTAssertTrue(NightscoutEntryPollingSchedule().isRefreshDue(at: Date()))
+    }
+
+    func testEntryPollTargetsReadingTimestampRatherThanResponseTime() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now.addingTimeInterval(-120), at: now)
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(180))
+        XCTAssertFalse(schedule.isRefreshDue(at: now.addingTimeInterval(179)))
+        XCTAssertTrue(schedule.isRefreshDue(at: now.addingTimeInterval(180)))
+    }
+
+    func testStaleAndDuplicateResponsesDoNotRestartFiveMinuteGate() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        let reading = now.addingTimeInterval(-300)
+        schedule.completed(latestReadingAt: reading, at: now)
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(30))
+
+        schedule.completed(latestReadingAt: reading, at: now.addingTimeInterval(30))
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(60))
+    }
+
+    func testFailedOrEmptyPollRetriesInThirtySeconds() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now, at: now)
+        schedule.completed(latestReadingAt: nil, at: now.addingTimeInterval(10))
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(40))
+    }
+
+    func testFutureReadingCannotPostponePolling() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now.addingTimeInterval(600), at: now)
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(30))
+    }
+
+    func testEmptyResponseRetriesDespiteRecentCachedReading() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now, at: now)
+        schedule.completed(readings: [], at: now.addingTimeInterval(60))
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(90))
+    }
+
+    func testUnusableResponseRetriesDespiteRecentCachedReading() {
+        let now = Date()
+        let futureReading = NightscoutEntryRecord(
+            storageKey: "future", dateMillis: now.addingTimeInterval(600).timeIntervalSince1970 * 1000,
+            type: "sgv", sgv: 100, mbg: nil, direction: "-"
+        )
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now, at: now)
+        schedule.completed(readings: [futureReading], at: now)
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(30))
+    }
+
+    func testDelayedResponseUsesNextReadingTime() {
+        let now = Date()
+        var schedule = NightscoutEntryPollingSchedule()
+        schedule.completed(latestReadingAt: now.addingTimeInterval(-299), at: now)
+
+        XCTAssertEqual(schedule.nextRefreshAt, now.addingTimeInterval(1))
+    }
+
     override func tearDown() {
         NightscoutCacheService.singleton.updateTodaysBgDataForTesting([])
 
