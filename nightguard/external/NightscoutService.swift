@@ -306,9 +306,18 @@ final class NightscoutAPIClient {
                         body: body,
                         trackedTask: trackedTask,
                         compatibilityFallback: true,
-                        useAccessTokenHeader: legacyUseAccessTokenHeader,
-                        completion: completion
-                    )
+                        useAccessTokenHeader: legacyUseAccessTokenHeader
+                    ) { legacyResult in
+                        // If the token itself was denied and v1 also fails,
+                        // report the credential error rather than the v1 one.
+                        if case .failure = legacyResult,
+                           let authError = error as? NightscoutHTTPError,
+                           authError.statusCode == 401 || authError.statusCode == 403 {
+                            completion(.failure(authError))
+                        } else {
+                            completion(legacyResult)
+                        }
+                    }
                 } else {
                     trackedTask.finish()
                     completion(.failure(error))
@@ -526,7 +535,9 @@ final class NightscoutAPIClient {
         guard let expiresAt = cached.expiresAt else { return false }
         let lifetime = expiresAt.timeIntervalSince(cached.obtainedAt)
         let lead = min(jwtRefreshLead, max(lifetime / 4, 0))
-        return date >= expiresAt.addingTimeInterval(-lead)
+        // Open the refresh window before the usability cutoff so short-lived
+        // tokens are still refreshed in the background.
+        return date >= expiresAt.addingTimeInterval(-(jwtExpirySafetyMargin + lead))
     }
 
     /// Expiry from the authorization response's `exp`, or from the token's
