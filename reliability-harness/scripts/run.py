@@ -32,6 +32,7 @@ MONGOD = Path(os.environ.get("MONGOD_BIN", "/opt/homebrew/opt/mongodb-community/
 APP_BUNDLE_ID = "de.my-wan.dhe.nightguard"
 TEST_NAME = "nightguardUITests/AlarmReliabilityUITests/testAlarmSession"
 TOKEN_ASSIGNMENT = re.compile(r"(?i)(token=)[^&\s\"'<>]+")
+XCODE_TEST_LAUNCH_LOCK = threading.Lock()
 
 
 def reserve_port():
@@ -94,6 +95,64 @@ def run_logged(command, logfile, cwd=None, env=None, timeout=None):
             check=False,
         )
     return completed.returncode
+
+
+def load_average_1m():
+    try:
+        return os.getloadavg()[0]
+    except (AttributeError, OSError):
+        return float("inf")
+
+
+def wait_for_load_below(threshold, timeout_seconds):
+    started = time.monotonic()
+    while True:
+        load_average = load_average_1m()
+        elapsed = time.monotonic() - started
+        if load_average < threshold:
+            return {
+                "waitMs": int(elapsed * 1000),
+                "loadAverage1m": round(load_average, 2),
+                "timedOut": False,
+            }
+        remaining = timeout_seconds - elapsed
+        if remaining <= 0:
+            return {
+                "waitMs": int(elapsed * 1000),
+                "loadAverage1m": round(load_average, 2),
+                "timedOut": True,
+            }
+        time.sleep(min(5, remaining))
+
+
+def run_logged_with_load_gate(command, logfile, cwd, env, timeout, logical_cpus):
+    logfile = Path(logfile)
+    logfile.parent.mkdir(parents=True, exist_ok=True)
+    with logfile.open("w", encoding="utf-8") as output:
+        with XCODE_TEST_LAUNCH_LOCK:
+            gate = wait_for_load_below(3 * logical_cpus, 120)
+            if gate["timedOut"]:
+                raise RuntimeError(
+                    "1-minute load average remained above "
+                    f"{3 * logical_cpus} for 120 seconds"
+                )
+            output.write(
+                f"Load gate passed after {gate['waitMs']} ms "
+                f"at 1-minute load {gate['loadAverage1m']}\n"
+            )
+            process = subprocess.Popen(
+                [str(item) for item in command],
+                cwd=cwd,
+                env=env,
+                stdout=output,
+                stderr=subprocess.STDOUT,
+            )
+        try:
+            return process.wait(timeout=timeout), gate
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            raise
 
 
 def tail(path, lines=60):
@@ -505,12 +564,103 @@ def create_simulators(count, run_id, run_dir):
         json.dumps({
             "source": source_id,
             "runtime": runtime,
+            "requestedDevices": simulators,
             "devices": simulators,
             "creationMethods": methods,
         }, indent=2) + "\n",
         encoding="utf-8",
     )
     return source_id, simulators, runtime
+
+
+def boot_simulators(simulators, run_dir, logical_cpus):
+    boot_log = run_dir / "services" / "simulator-boot.log"
+    boot_results = []
+    active_simulators = []
+    for index, simulator_id in enumerate(simulators):
+        started = time.monotonic()
+        result = {
+            "simulator": simulator_id,
+            "status": "booted",
+            "bootMs": None,
+        }
+        try:
+            devices = json.loads(command_output([
+                "xcrun", "simctl", "list", "devices", "available", "-j"
+            ]))
+            state = next(
+                (
+                    device.get("state")
+                    for runtime_devices in devices["devices"].values()
+                    for device in runtime_devices
+                    if device.get("udid") == simulator_id
+                ),
+                None,
+            )
+            if state is None:
+                raise RuntimeError("Simulator no longer appears in simctl device list")
+            with boot_log.open("a", encoding="utf-8") as output:
+                output.write(f"Booting simulator {simulator_id}\n")
+                if state != "Booted":
+                    subprocess.run(
+                        ["xcrun", "simctl", "boot", simulator_id],
+                        stdout=output,
+                        stderr=subprocess.STDOUT,
+                        check=True,
+                        timeout=60,
+                    )
+                subprocess.run(
+                    ["xcrun", "simctl", "bootstatus", simulator_id, "-b"],
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    check=True,
+                    timeout=600,
+                )
+            result["bootMs"] = int((time.monotonic() - started) * 1000)
+            active_simulators.append(simulator_id)
+            print(f"Simulator {simulator_id} booted in {result['bootMs']} ms", flush=True)
+        except Exception as error:
+            result["status"] = "failed"
+            result["bootMs"] = int((time.monotonic() - started) * 1000)
+            result["error"] = f"{type(error).__name__}: {error}"
+            with boot_log.open("a", encoding="utf-8") as output:
+                output.write(
+                    f"Simulator {simulator_id} failed to boot; dropping slot: "
+                    f"{result['error']}\n"
+                )
+            print(
+                f"Simulator {simulator_id} failed to boot; dropping slot: "
+                f"{result['error']}",
+                flush=True,
+            )
+            try:
+                subprocess.run(
+                    ["xcrun", "simctl", "shutdown", simulator_id],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    timeout=60,
+                )
+            except Exception:
+                pass
+        if index + 1 < len(simulators):
+            result["loadWaitAfter"] = wait_for_load_below(2 * logical_cpus, 90)
+            with boot_log.open("a", encoding="utf-8") as output:
+                output.write(
+                    f"Inter-boot load wait after {simulator_id}: "
+                    f"{result['loadWaitAfter']}\n"
+                )
+        boot_results.append(result)
+
+    simulator_file = run_dir / "simulators.json"
+    simulator_data = json.loads(simulator_file.read_text(encoding="utf-8"))
+    simulator_data["devices"] = active_simulators
+    simulator_data["bootResults"] = boot_results
+    simulator_file.write_text(
+        json.dumps(simulator_data, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return active_simulators, boot_results
 
 
 def prepare_build_worktree(app_ref, worktree, source_root):
@@ -620,6 +770,13 @@ def reset_simulator(udid, logfile):
     boot_log = Path(logfile)
     boot_log.parent.mkdir(parents=True, exist_ok=True)
     with boot_log.open("a", encoding="utf-8") as output:
+        subprocess.run(
+            ["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID],
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=60,
+        )
         group_result = subprocess.run(
             ["xcrun", "simctl", "get_app_container", udid, APP_BUNDLE_ID, "groups"],
             stdout=subprocess.PIPE,
@@ -649,44 +806,14 @@ def reset_simulator(udid, logfile):
                 and group_container.exists()
             ):
                 shutil.rmtree(group_container)
-            subprocess.run(
-                ["xcrun", "simctl", "terminate", udid, APP_BUNDLE_ID],
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=60,
-            )
-            subprocess.run(
-                ["xcrun", "simctl", "uninstall", udid, APP_BUNDLE_ID],
-                stdout=output,
-                stderr=subprocess.STDOUT,
-                check=False,
-                timeout=120,
-            )
         elif group_result.stderr:
             output.write(group_result.stderr)
-    subprocess.run(
-        ["xcrun", "simctl", "shutdown", udid],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-        timeout=60,
-    )
-    command_output(["xcrun", "simctl", "erase", udid], timeout=180)
-    with boot_log.open("a", encoding="utf-8") as output:
         subprocess.run(
-            ["xcrun", "simctl", "boot", udid],
+            ["xcrun", "simctl", "uninstall", udid, APP_BUNDLE_ID],
             stdout=output,
             stderr=subprocess.STDOUT,
-            check=True,
-            timeout=60,
-        )
-        subprocess.run(
-            ["xcrun", "simctl", "bootstatus", udid, "-b"],
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            check=True,
-            timeout=240,
+            check=False,
+            timeout=120,
         )
         subprocess.run(
             ["xcrun", "simctl", "keychain", udid, "reset"],
@@ -695,6 +822,7 @@ def reset_simulator(udid, logfile):
             check=False,
             timeout=60,
         )
+        output.write("App state reset; simulator remains booted\n")
 
 
 def run_node_json(command, env, timeout, logfile=None):
@@ -815,6 +943,7 @@ def execute_session(
     gateway_port,
     run_dir,
     xctestrun,
+    logical_cpus,
 ):
     session_id = f"{args.label}-{index:03d}"
     session_dir = run_dir / "sessions" / session_id
@@ -828,6 +957,7 @@ def execute_session(
     live_readings = []
     seed_result = {}
     registration = {}
+    launch_load_gate = {}
     seed_env = node_environment({
         "HARNESS_NIGHTSCOUT_TOKEN": tokens[str(slot_number)]["accessToken"],
     })
@@ -926,7 +1056,7 @@ def execute_session(
         test_env = node_environment()
         test_env.pop("TEST_RUNNER_SESSION_CONFIG", None)
         test_env.pop("TEST_RUNNER_SESSION_CONFIG_JSON", None)
-        test_exit_code = run_logged(
+        test_exit_code, launch_load_gate = run_logged_with_load_gate(
             [
                 "xcodebuild",
                 "test-without-building",
@@ -941,9 +1071,10 @@ def execute_session(
                 "NO",
             ],
             session_log,
-            cwd=ROOT,
-            env=test_env,
-            timeout=int(shape["duration_seconds"]) + 900,
+            ROOT,
+            test_env,
+            int(shape["duration_seconds"]) + 900,
+            logical_cpus,
         )
         if test_exit_code:
             harness_error = f"xcodebuild exited {test_exit_code}"
@@ -986,6 +1117,7 @@ def execute_session(
             "eventFile": str(event_file),
             "readings": seed_result.get("readings", []) + live_readings,
             "episodes": registration.get("episodes", []),
+            "launchLoadGate": launch_load_gate,
             "overheadMs": (
                 first_t0_display(event_file, seed_result.get("t0Sgv")) - session_started_ms
                 if first_t0_display(event_file, seed_result.get("t0Sgv")) is not None
@@ -1100,7 +1232,8 @@ def main():
         session_indexes = list(range(start, end))
     else:
         session_indexes = list(range(args.n))
-    workers = min(args.workers, len(session_indexes))
+    requested_workers = min(args.workers, len(session_indexes))
+    workers = requested_workers
     profile_fingerprint = None
     if profile is not None:
         profile_fingerprint = hashlib.sha256(
@@ -1112,6 +1245,13 @@ def main():
     try:
         terminate_stale_services()
         require_tools()
+        logical_cpus = int(command_output(["sysctl", "-n", "hw.logicalcpu"]).strip())
+        source_id, simulator_clones, runtime = create_simulators(workers, run_id, run_dir)
+        simulators = simulator_clones
+        simulators, simulator_boots = boot_simulators(simulators, run_dir, logical_cpus)
+        workers = len(simulators)
+        if not workers:
+            raise RuntimeError("No simulator clones booted successfully")
         nightscout = ensure_nightscout(run_dir / "services")
         mongo_process, args.mongo_port = start_mongo(run_dir / "services", processes)
         api_secret = secrets.token_urlsafe(36)
@@ -1134,7 +1274,6 @@ def main():
         gateway_log = run_dir / "gateway.jsonl"
         gateway_process, gateway_port = start_gateway(slots, gateway_log)
         processes.append(gateway_process)
-        source_id, simulators, runtime = create_simulators(workers, run_id, run_dir)
         worktree = STATE / "worktrees" / f"{run_id}-build"
         worktree.parent.mkdir(parents=True, exist_ok=True)
         prepare_build_worktree(args.app_ref, worktree, ROOT)
@@ -1147,7 +1286,8 @@ def main():
         )
 
         measurement = {
-            "requestedWorkers": workers,
+            "requestedWorkers": requested_workers,
+            "activeWorkers": workers,
             "simulatorRuntime": runtime,
             "simulatorSource": source_id,
             "sessionIndexes": session_indexes,
@@ -1167,6 +1307,7 @@ def main():
                 "profileFingerprint": profile_fingerprint,
                 "shapeFingerprint": shape_fingerprint,
                 "controlTreatmentValidation": bool(args.control_treatment_profile),
+                "requestedWorkers": requested_workers,
                 "workers": workers,
                 "nightscoutTag": "v15.0.9",
                 "nodeVersion": command_output([NODE, "--version"]).strip(),
@@ -1174,6 +1315,7 @@ def main():
                 "gatewayPort": gateway_port,
                 "slots": slots,
                 "simulators": simulators,
+                "simulatorBoots": simulator_boots,
                 "xctestrun": str(xctestrun),
             }, indent=2) + "\n",
             encoding="utf-8",
@@ -1209,6 +1351,7 @@ def main():
                     gateway_port,
                     run_dir,
                     xctestrun,
+                    logical_cpus,
                 )
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -1224,7 +1367,6 @@ def main():
             if item.get("overheadMs") is not None
         ]
         median_overhead_ms = sorted(overheads)[len(overheads) // 2] if overheads else 0
-        logical_cpus = int(command_output(["sysctl", "-n", "hw.logicalcpu"]).strip())
         memory_bytes = int(command_output(["sysctl", "-n", "hw.memsize"]).strip())
         memory_gib = memory_bytes / (1024 ** 3)
         per_worker_rss = measurement["maxObservedTotalProcessRssMiB"] / workers

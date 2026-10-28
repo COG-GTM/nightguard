@@ -24,6 +24,7 @@ final class AlarmReliabilityUITests: XCTestCase {
             return
         }
         let config = try JSONDecoder().decode(SessionConfiguration.self, from: data)
+        print("ALARM_RELIABILITY_CONFIG_LOADED sessionId=\(config.sessionId)")
         let app = XCUIApplication()
         app.launchArguments = [
             "--uitesting",
@@ -32,6 +33,7 @@ final class AlarmReliabilityUITests: XCTestCase {
             "--reliability-units", config.units,
             "--reliability-missed-threshold-minutes", String(config.missedThresholdMinutes)
         ]
+        print("ALARM_RELIABILITY_APP_LAUNCH sessionId=\(config.sessionId)")
         app.launch()
 
         let bgValue = app.staticTexts["reliability-bg-value"]

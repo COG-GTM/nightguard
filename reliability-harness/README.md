@@ -37,9 +37,14 @@ reliability-harness/scripts/setup-nightscout.sh
 The script installs `nightscout/cgm-remote-monitor` tag `v15.0.9` in
 `.state/`, verifies the exact tag commit, and runs `npm ci` with Node 20.
 The first `run.sh` invocation automatically performs `xcodebuild
-build-for-testing`, creates/reset iPhone 17 simulator devices (cloning a source
-device when supported and falling back to a clean device when not), starts
-services, and runs the UI test. On the reference host, clean-checkout setup
+build-for-testing`, creates iPhone 17 simulator clones (falling back to clean
+devices when cloning is unavailable), starts services, and runs the UI test.
+Clones are cold-booted serially with load-average waits between boots, retained
+booted for the run, and reused across session waves. Per-session cleanup
+uninstalls the app and clears its app-group state without rebooting the clone.
+Before launching each UI test, the runner waits for the 1-minute load average
+to drop below three times the logical CPU count, for up to 120 seconds. On the
+reference host, clean-checkout setup
 from clone through first UI-test launch took about **2.1 minutes**. The
 Homebrew MongoDB tap and the Node 20.20.2 and MongoDB Community 9.0.4 installs
 were already present on that host and were skipped during that measurement.
@@ -145,6 +150,7 @@ Run output is written to `results/<label>-<timestamp>/`:
 - `sessions/` contains per-session metadata and test logs.
 - `capacity.json` records the observed parallel worker count and sampled
   simulator/test-process CPU and memory use, plus a target-N time estimate.
+- `run.json` records each clone's boot duration, status, and inter-boot load wait.
 
 Per-slot access tokens, per-session runner configuration, MongoDB state,
 Nightscout checkout/dependencies, simulator clones, Xcode build products, and
