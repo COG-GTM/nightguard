@@ -14,6 +14,7 @@ For a Homebrew installation:
 
 ```sh
 brew tap mongodb/brew
+brew trust mongodb/brew
 brew install node@20 mongodb-community
 export NODE20_BIN="$(brew --prefix node@20)/bin"
 export MONGOD_BIN="$(brew --prefix mongodb-community)/bin/mongod"
@@ -227,8 +228,7 @@ The Xcode project adds that test source to the existing UI-test target.
 The runner removes the `nightguard` target's `Embed Watch Content` phase and
 WatchKit target dependency from `nightguard.xcodeproj/project.pbxproj` in its
 temporary build worktree. This lets the iOS UI-test scheme build on hosts without
-the watchOS 26.5 simulator runtime (`xcodebuild -downloadPlatform watchOS
--buildVersion 26.5` reports that runtime is unavailable for download). The
+a watchOS simulator runtime, so fresh VMs do not need to download one. The
 exclusion exists only in the temporary build worktree; the repository project
 still embeds the WatchKit app, and the measured iOS app behavior is unchanged.
 The WatchKit app is not part of the measured path.
