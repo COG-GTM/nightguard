@@ -145,10 +145,33 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         UIView.setAnimationsEnabled(false)
         // Ensure alarms are enabled so the actions menu button is visible for UI tests
         AlarmRule.areAlertsGenerallyDisabled.value = false
+        AlarmRule.noDataAlarmEnabled.value = true
         // Suppress App Tour
         UserDefaultsRepository.appTourSeen.value = true
         // Suppress Disclaimer
         UserDefaultsRepository.disclaimerSeen.value = true
+
+        let arguments = CommandLine.arguments
+        func value(for argument: String) -> String? {
+            guard let index = arguments.firstIndex(of: argument), arguments.indices.contains(index + 1) else {
+                return nil
+            }
+            return arguments[index + 1]
+        }
+
+        if let hostUri = value(for: "--reliability-host-uri") {
+            UserDefaultsRepository.baseUri.value = hostUri
+        }
+        if let lowerBound = value(for: "--reliability-low-threshold-mgdl").flatMap(Float.init) {
+            UserDefaultsRepository.lowerBound.value = lowerBound
+        }
+        if let units = value(for: "--reliability-units").flatMap(Units.init(rawValue:)) {
+            UserDefaultsRepository.manuallySetUnits.value = true
+            UserDefaultsRepository.units.value = units
+        }
+        if let minutes = value(for: "--reliability-missed-threshold-minutes").flatMap(Int.init) {
+            AlarmRule.minutesWithoutValues.value = minutes
+        }
     }
     
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {

@@ -241,6 +241,8 @@ struct MainView: View {
                                 .font(.system(size: 120))
                                 .foregroundColor(viewModel.bgColor)
                                 .minimumScaleFactor(0.5)
+                                .accessibilityIdentifier("reliability-bg-value")
+                                .accessibilityValue(viewModel.alarmRuleMessage)
 
                             // Delta and time info
                             VStack(alignment: .leading, spacing: 0) {
@@ -255,6 +257,7 @@ struct MainView: View {
                                 Text(viewModel.lastUpdateValue)
                                     .font(.system(size: 25))
                                     .foregroundColor(viewModel.lastUpdateColor)
+                                    .accessibilityIdentifier("reliability-last-update")
                             }
 
                             Spacer(minLength: 10)
@@ -264,6 +267,7 @@ struct MainView: View {
                                 Text(viewModel.timeValue)
                                     .font(.system(size: 19))
                                     .foregroundColor(.white)
+                                    .accessibilityIdentifier("reliability-time")
 
                                 HStack(spacing: 8) {
                                     Text(viewModel.cobValue)

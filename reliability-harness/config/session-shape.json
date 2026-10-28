@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "duration_seconds": 840,
+  "missed_readings_threshold_minutes": 15,
+  "low_threshold_mgdl": 70,
+  "units": "mgdl",
+  "history_minutes": 60,
+  "reading_interval_minutes": 5,
+  "history_end_offset_minutes": 2,
+  "initial_history_values_mgdl": [110, 109, 108, 107, 106, 105, 104, 103, 102, 101, 100, 98, 96],
+  "realtime_readings": [
+    { "offset_minutes": 3, "sgv": 64 },
+    { "offset_minutes": 8, "sgv": 58 },
+    { "offset_minutes": 13, "sgv": 52 }
+  ],
+  "device": "synthetic-cgm",
+  "direction": "FortyFiveDown"
+}

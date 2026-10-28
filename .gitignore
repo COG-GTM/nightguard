@@ -13,6 +13,10 @@ nightguard/.env
 .claude/
 .antigravitycli/
 
+# Native reliability-harness runtime artifacts
+reliability-harness/.state/
+reliability-harness/results/
+
 # Xcode user state and build products
 build/
 DerivedData/
